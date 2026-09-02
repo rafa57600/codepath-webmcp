@@ -1,0 +1,12 @@
+node_modules
+dist
+data/state.json
+*.local
+.DS_Store
+
+# Build artifacts
+*.tsbuildinfo
+
+# Local agent tooling (memory/config) — not part of the app
+.anthracode/
+

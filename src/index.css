@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: #020617;
+}
+
+/* ---- Visual explanation custom animation classes ---- */
+
+@keyframes ping-once {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+.animate-ping-once { animation: ping-once 0.4s ease; }
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fade-in 0.4s ease both; }
+
+.chip {
+  @apply rounded-md border border-white/10 bg-slate-800 px-3 py-1.5 text-sm text-slate-400 transition-all duration-300;
+}
+.chip-active {
+  @apply border-emerald-400/40 bg-emerald-500/15 text-emerald-200;
+}
+
+.step-arrow { @apply flex flex-col items-center; }
+.step-arrow .arrow-line { @apply h-4 w-px bg-emerald-400 transition-colors; }
+.step-arrow .arrow-line.dim { @apply bg-white/10; }
+.step-arrow .arrow-head { @apply text-emerald-400 transition-colors; }
+.step-arrow .arrow-head.dim { @apply text-white/10; }
+
+/* Variable box */
+.box-wrap {
+  @apply relative w-48 rounded-lg border-2 border-dashed border-white/25 bg-slate-950 p-4 text-center transition-all duration-500;
+}
+.box-wrap.box-filled {
+  @apply border-solid border-indigo-400/60 bg-indigo-500/10;
+}
+.box-label {
+  @apply absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-700 px-2 py-0.5 text-xs font-mono text-white;
+}
+.box-value {
+  @apply mt-2 font-mono text-lg text-emerald-300;
+}
+
+.code-snippet {
+  @apply rounded-md bg-slate-950 px-3 py-2 font-mono text-sm text-emerald-200;
+}
+
+/* Condition tree */
+.tree-active { @apply bg-emerald-400 transition-colors; }
+.branch-connector { @apply h-4 w-px bg-white/20 transition-colors; }
+.outcome-active { @apply scale-105 font-semibold; }
+
+/* CodeMirror tweaks */
+.cm-editor { font-size: 14px; border-radius: 8px; overflow: hidden; }
+.cm-editor .cm-scroller { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; }
