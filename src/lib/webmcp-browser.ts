@@ -37,10 +37,13 @@ import type { ToolResult } from './webmcp';
 
 // ---------------------------------------------------------------------------
 // Shared tool handlers — the single source of truth used by BOTH registration
-// surfaces below. Each handler returns a structured WebMCP ToolResult.
+// surfaces below. Each handler returns a CLEAN plain-object result (no MCP
+// `content` envelope) so Chrome WebMCP never double-wraps. The shared business
+// logic in webmcp.ts still returns MCP-style ToolResults; `toPlain` unwraps
+// them here, and that shared logic is left untouched for the Node MCP server.
 // ---------------------------------------------------------------------------
 
-export type ToolHandler = (args?: Record<string, unknown>) => Promise<ToolResult>;
+export type ToolHandler = (args?: Record<string, unknown>) => Promise<unknown>;
 
 function snapshot(): SessionState {
   const s = useProgress.getState();
@@ -67,22 +70,50 @@ function asRecord(args: unknown): Record<string, unknown> | undefined {
   return args && typeof args === 'object' ? (args as Record<string, unknown>) : undefined;
 }
 
-function text(obj: unknown): ToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] };
+/**
+ * Convert a shared MCP-style `ToolResult` ({ content: [{type:'text',
+ * text: JSON.stringify(payload)}] }) into a CLEAN plain object suitable for
+ * Chrome WebMCP.
+ *
+ * Chrome WebMCP wraps whatever `execute` resolves to inside its OWN single
+ * { content: [{ type:'text', text }] } envelope. If we returned the shared MCP
+ * ToolResult object as-is, Chrome would stringify that whole envelope into
+ * `text`, yielding a nested { content:[...] } JSON *inside* the outer envelope
+ * (the double-wrap observed in the wild). Unwrapping here means `text` holds
+ * the actual JSON payload exactly once — the clean result an agent expects.
+ *
+ * Shared business logic is NOT touched; we only unpack the envelope it returns.
+ */
+function toPlain(result: ToolResult): Record<string, unknown> {
+  const first = result.content?.[0];
+  const raw = first && first.type === 'text' ? first.text : undefined;
+  if (raw === undefined || raw === '') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>;
+    return { value: parsed };
+  } catch {
+    // Not valid JSON (never expected, since output is always JSON.stringify'd).
+    return { text: raw };
+  }
 }
 
 /**
  * The 7 shared tool handlers. `buildToolHandlers()` returns an object keyed by
  * tool name. Both `document.modelContext.registerTool` and the dev bridge call
  * the functions herein.
+ *
+ * Each handler resolves to a CLEAN plain result (no MCP `content` envelope) so
+ * Chrome WebMCP's own single envelope is the only wrapper — never a nested
+ * `content` inside a serialized `content`.
  */
 export function buildToolHandlers(): Record<string, ToolHandler> {
   const handlers: Record<string, ToolHandler> = {
-    get_course_progress: async () => text(getCourseProgress(snapshot())),
+    get_course_progress: async () => toPlain(getCourseProgress(snapshot())),
 
-    get_current_lesson: async () => text(getCurrentLesson(snapshot())),
+    get_current_lesson: async () => toPlain(getCurrentLesson(snapshot())),
 
-    get_current_exercise: async (args) => text(getCurrentExercise(snapshot(), asRecord(args))),
+    get_current_exercise: async (args) => toPlain(getCurrentExercise(snapshot(), asRecord(args))),
 
     run_code: async (args) => {
       const a = asRecord(args);
@@ -94,13 +125,13 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
           ? state.studentCode[a.exerciseId as string] ?? found?.tryIt.starterCode ?? ''
           : found?.tryIt.starterCode ?? '');
       const result = await runUserCode(code);
-      return text({
+      return {
         success: result.success,
         stdout: result.stdout,
         runtimeError: result.runtimeError,
         variables: result.variables,
         exerciseId: a?.exerciseId ?? null,
-      });
+      };
     },
 
     submit_solution: async (args) => {
@@ -113,7 +144,7 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         javascriptCourse.lessons.find((l) => l.id === state.currentLessonId);
       const exercise = lesson?.exercises.find((e) => e.id === exerciseId) ?? lesson?.exercises[0];
       if (!lesson || !exercise) {
-        return text({ error: 'Exercise not found.' });
+        return { error: 'Exercise not found.' };
       }
       const code = state.studentCode[exercise.id] ?? exercise.starterCode;
       const result = await validateSolution(lesson, exercise, code);
@@ -129,7 +160,7 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         lesson.id,
         exercise.id
       );
-      return text({
+      return {
         passed: result.passed,
         testsPassed: result.testsPassed,
         testsTotal: result.testsTotal,
@@ -138,52 +169,31 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         failedTests: result.failedTests.map((f) => f.description),
         exerciseId: exercise.id,
         lesson: lesson.id,
-      });
+      };
     },
 
     open_lesson: async (args) => {
       const a = asRecord(args);
       const lessonId = a?.lessonId;
       const VALID_IDS = ['introduction', 'variables', 'conditions', 'loops'];
+      const missingError =
+        'lessonId is required. One of: introduction, variables, conditions, loops.';
+      const invalidError = (id: string) =>
+        `Invalid lessonId "${id}". Must be one of: introduction, variables, conditions, loops.`;
+
       // Defensive: open_lesson REQUIRES a valid lessonId. Missing or invalid
       // returns a clean structured error and never changes navigation.
       if (typeof lessonId !== 'string' || lessonId.trim() === '') {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                { error: 'lessonId is required. One of: introduction, variables, conditions, loops.' },
-                null,
-                2
-              ),
-            },
-          ],
-          navigated: false,
-        };
+        return { error: missingError, navigated: false };
       }
       if (!VALID_IDS.includes(lessonId)) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  error: `Invalid lessonId "${lessonId}". Must be one of: introduction, variables, conditions, loops.`,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-          navigated: false,
-        };
+        return { error: invalidError(lessonId), navigated: false };
       }
       const r = openLesson(provider, { lessonId });
-      return { content: r.content, navigated: true };
+      return { ...toPlain(r), navigated: true };
     },
 
-    get_learning_context: async () => text(getLearningContext(snapshot())),
+    get_learning_context: async () => toPlain(getLearningContext(snapshot())),
   };
   return handlers;
 }
@@ -264,7 +274,7 @@ type ModelContextLike = {
     name: string;
     description: string;
     inputSchema: JsonSchema;
-    execute: (input: Record<string, unknown> | undefined) => Promise<ToolResult>;
+    execute: (input: Record<string, unknown> | undefined) => Promise<unknown>;
   }) => unknown;
 };
 

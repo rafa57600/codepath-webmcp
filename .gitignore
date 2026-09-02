@@ -10,3 +10,5 @@ data/state.json
 # Local agent tooling (memory/config) — not part of the app
 .anthracode/
 
+
+.vercel
