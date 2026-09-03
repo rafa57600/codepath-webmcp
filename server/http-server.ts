@@ -38,6 +38,8 @@ app.post('/api/state', async (req, res) => {
     'recentMistakes',
     'studentCode',
     'tutorMode',
+    'activeStep',
+    'currentActivity',
   ];
   const clean: Record<string, unknown> = {};
   for (const key of allowed) {

@@ -18,6 +18,22 @@ export interface ServerState {
   recentMistakes: Array<{ concept: string; exerciseId: string; timestamp: number }>;
   studentCode: Record<string, string>;
   tutorMode: 'guide' | 'balanced' | 'explain';
+  activeStep: {
+    stepId: string;
+    type: 'explanation' | 'visual' | 'example' | 'practice' | 'exercise' | 'challenge' | 'quiz';
+    title: string;
+    index: number;
+  } | null;
+  currentActivity:
+    | 'reading'
+    | 'viewing_visual'
+    | 'viewing_example'
+    | 'editing_code'
+    | 'running_code'
+    | 'solving_exercise'
+    | 'reviewing_feedback'
+    | 'answering_quiz'
+    | null;
 }
 
 const DEFAULT_STATE: ServerState = {
@@ -30,6 +46,8 @@ const DEFAULT_STATE: ServerState = {
   recentMistakes: [],
   studentCode: {},
   tutorMode: 'guide',
+  activeStep: null,
+  currentActivity: null,
 };
 
 let cache: ServerState | undefined;
@@ -43,7 +61,14 @@ export async function loadState(): Promise<ServerState> {
   await ensureDataDir();
   try {
     const raw = await fs.readFile(STATE_FILE, 'utf-8');
-    cache = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+    const parsed = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+    // A reload/restart means any in-flight run is gone. Never report (or
+    // persist) `running_code` across restart — clamp to the stable post-run
+    // activity the browser hydrates to.
+    if (parsed.currentActivity === 'running_code') {
+      parsed.currentActivity = 'reviewing_feedback';
+    }
+    cache = parsed;
   } catch {
     cache = structuredClone(DEFAULT_STATE);
     await saveState(cache);

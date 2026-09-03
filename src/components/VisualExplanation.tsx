@@ -28,7 +28,7 @@ function InteractionVisual() {
 
   const arrow = (from: number, to: number) =>
     animationStep >= to ? (
-      <div className={`step-arrow show`}>
+      <div className="step-arrow show">
         <span className="arrow-line" />
         <span className="arrow-head">↓</span>
       </div>
@@ -40,23 +40,25 @@ function InteractionVisual() {
     );
 
   return (
-    <div className="rounded-xl border border-white/10 bg-slate-900 p-6">
+    <div className="card p-6">
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:items-center">
         <div className="flex flex-col items-center gap-4">
           <button
             onClick={handleClick}
-            className={`rounded-lg px-6 py-3 text-lg font-semibold transition-all ${
+            className={`rounded-xl px-6 py-3 text-lg font-semibold transition-all ${
               animationStep === 1
-                ? 'animate-ping-once scale-105 bg-emerald-500 text-slate-900'
-                : 'bg-emerald-500 text-slate-900 hover:bg-emerald-400'
+                ? 'animate-ping-once scale-105 bg-kumo-brand text-white'
+                : 'bg-kumo-brand text-white hover:bg-kumo-brand-hover'
             }`}
           >
             Click me
           </button>
-          <div className="w-full max-w-xs rounded-lg border border-white/10 bg-slate-950 p-4 text-center">
-            <div className="text-xs uppercase tracking-wide text-slate-400">Message</div>
+          <div className="w-full max-w-xs rounded-xl border border-kumo-hairline bg-kumo-tint p-4 text-center shadow-sm">
+            <div className="text-xs font-medium uppercase tracking-wide text-kumo-text-subtle">Message</div>
             <div
-              className={`mt-1 text-sm font-medium ${message !== 'Nothing happened yet.' ? 'text-emerald-400' : 'text-slate-300'}`}
+              className={`mt-1 text-sm font-semibold ${
+                message !== 'Nothing happened yet.' ? 'text-kumoText-info' : 'text-kumo-text-default'
+              }`}
             >
               {message}
             </div>
@@ -72,14 +74,14 @@ function InteractionVisual() {
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3">
-        <p className="text-sm text-slate-400">
+      <div className="mt-4 flex items-center justify-between border-t border-kumo-hairline pt-3">
+        <p className="text-sm text-kumo-text-subtle">
           JavaScript = making the page react to what happens.
         </p>
         {clicked && (
           <button
             onClick={reset}
-            className="flex items-center gap-1.5 rounded-md bg-white/5 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10"
+            className="btn btn-secondary btn-sm"
           >
             <RotateCcw size={12} /> Reset demo
           </button>
@@ -95,13 +97,11 @@ function VariableBoxVisual() {
   const value = step >= 3 ? 'Sara' : 'Adam';
 
   return (
-    <div className="rounded-xl border border-white/10 bg-slate-900 p-6">
+    <div className="card p-6">
       <div className="flex flex-col items-center gap-4">
         {/* The box */}
         <div className="flex flex-col items-center">
-          <div
-            className={`box-wrap transition-all ${step >= 1 ? 'box-filled' : ''}`}
-          >
+          <div className={`box-wrap transition-all ${step >= 1 ? 'box-filled' : ''}`}>
             <div className="box-label">name</div>
             <div className="box-value">{step >= 1 ? `"${value}"` : ''}</div>
           </div>
@@ -110,7 +110,7 @@ function VariableBoxVisual() {
         {/* Code reveal */}
         {step >= 2 && (
           <pre
-            className={`code-snippet transition-opacity duration-500 ${
+            className={`visual-code transition-opacity duration-500 ${
               step >= 2 ? 'opacity-100' : 'opacity-0'
             }`}
           >
@@ -121,13 +121,15 @@ function VariableBoxVisual() {
         {/* Value change arrow */}
         {step === 3 && (
           <div className="flex items-center gap-3 text-sm">
-            <span className="rounded bg-slate-800 px-3 py-1 text-slate-300">"Adam"</span>
-            <span className="text-emerald-400">↓</span>
-            <span className="rounded bg-slate-800 px-3 py-1 text-emerald-300">"Sara"</span>
+            <span className="visual-tag">"Adam"</span>
+            <span className="text-kumo-brand">↓</span>
+            <span className="visual-tag highlight">"Sara"</span>
           </div>
         )}
 
-        <p className={`text-sm text-slate-400 ${step >= 4 ? 'text-emerald-300' : ''}`}>
+        <p
+          className={`text-sm text-center ${step >= 4 ? 'font-medium text-kumoText-info' : 'text-kumo-text-subtle'}`}
+        >
           {step >= 4
             ? 'The value inside the box changed — that is a variable.'
             : 'Watch the box fill as a variable is created.'}
@@ -148,31 +150,29 @@ function ConditionTreeVisual() {
   const showOutcome = step >= 5;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-slate-900 p-6">
+    <div className="card p-6">
       <div className="mb-4 text-center">
-        <span className="rounded bg-slate-800 px-3 py-1 font-mono text-sm text-slate-200">
-          age = {age}    age &gt;= 18 ?
+        <span className="visual-tag">
+          age = {age} &nbsp;&nbsp; age &gt;= 18 ?
         </span>
       </div>
 
       <div className="flex flex-col items-center gap-1 text-sm">
-        <div className="rounded bg-slate-800 px-4 py-2 text-center text-slate-200">
-          {age} &gt;= 18 ?
-        </div>
-        <div className={`h-6 w-px bg-white/20 ${showDecision ? 'tree-active' : ''}`} />
+        <div className="visual-tag"> {age} &gt;= 18 ? </div>
+        <div className={`h-6 w-px ${showDecision ? 'tree-active' : 'bg-kumo-fill'}`} />
 
         <div className="flex items-start gap-6">
           {/* YES branch */}
           <div className="flex flex-col items-center">
-            {showDecision && (
-              <span className="text-xs font-bold text-emerald-400">YES</span>
-            )}
-            <div className={`branch-connector ${showDecision ? 'tree-active' : ''}`} />
+            {showDecision && <span className="text-xs font-bold text-kumo-brand">YES</span>}
             <div
-              className={`rounded px-4 py-2 transition-all ${
+              className={`branch-connector ${showDecision ? 'tree-active' : 'bg-kumo-fill'}`}
+            />
+            <div
+              className={`rounded-xl px-4 py-2 transition-all ${
                 showOutcome && isAdult
-                  ? 'outcome-active bg-emerald-500 text-slate-900'
-                  : 'bg-slate-800 text-slate-300'
+                  ? 'outcome-active bg-kumo-brand text-white'
+                  : 'visual-tag'
               }`}
             >
               Adult
@@ -181,13 +181,13 @@ function ConditionTreeVisual() {
 
           {/* NO branch */}
           <div className="flex flex-col items-center">
-            {showDecision && <span className="text-xs font-bold text-slate-400">NO</span>}
-            <div className={`branch-connector ${showDecision ? 'tree-active' : ''}`} />
+            {showDecision && <span className="text-xs font-bold text-kumo-text-subtle">NO</span>}
             <div
-              className={`rounded px-4 py-2 transition-all ${
-                showOutcome && !isAdult
-                  ? 'outcome-active bg-rose-500 text-slate-900'
-                  : 'bg-slate-800 text-slate-300'
+              className={`branch-connector ${showDecision ? 'tree-active' : 'bg-kumo-fill'}`}
+            />
+            <div
+              className={`rounded-xl px-4 py-2 transition-all ${
+                showOutcome && !isAdult ? 'outcome-active bg-kumoDanger text-white' : 'visual-tag'
               }`}
             >
               Minor
@@ -197,7 +197,7 @@ function ConditionTreeVisual() {
       </div>
 
       {showOutcome && (
-        <pre className="mt-4 animate-fade-in rounded-lg bg-slate-950 p-3 text-left text-xs text-slate-300">
+        <pre className="visual-code mt-4 animate-fade-in text-left text-xs">
           <code>
             {'let age = 20;\nif (age >= 18) {\n  console.log("Adult");\n} else {\n  console.log("Minor");\n}'}
           </code>
@@ -239,18 +239,18 @@ function LoopFlowVisual() {
   }
 
   return (
-    <div className="rounded-xl border border-white/10 bg-slate-900 p-6">
+    <div className="card p-6">
       <div className="flex flex-wrap items-center justify-center gap-3 text-sm">
-        <span className="rounded bg-slate-800 px-3 py-1 font-mono text-slate-200">for (i = 1; i &lt;= 5; i++)</span>
+        <span className="visual-tag">for (i = 1; i &lt;= 5; i++)</span>
         <button
           onClick={() => setStep(0)}
-          className="flex items-center gap-1 rounded bg-white/5 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10"
+          className="btn btn-secondary btn-sm"
         >
           <RotateCcw size={12} /> Restart
         </button>
         <button
           onClick={() => setStep((s) => Math.min(maxStep, s + 1))}
-          className="flex items-center gap-1 rounded bg-emerald-500 px-2.5 py-1 text-xs text-slate-900 hover:bg-emerald-400"
+          className="btn btn-success btn-sm"
         >
           <Play size={12} /> Next
         </button>
@@ -260,12 +260,12 @@ function LoopFlowVisual() {
         {/* Condition box */}
         <div className="flex flex-col items-center">
           <div
-            className={`min-w-[100px] rounded border-2 px-4 py-2 font-mono text-sm transition-colors ${
+            className={`min-w-[100px] rounded-xl border-2 px-4 py-2 font-mono text-sm transition-colors ${
               lastCheck && lastCheck.passed
-                ? 'border-emerald-400 text-emerald-300'
+                ? 'border-kumo-brand bg-kumoInfo-tint text-kumoText-info'
                 : lastCheck
-                  ? 'border-rose-400 text-rose-300'
-                  : 'border-white/15 text-slate-400'
+                  ? 'border-kumoDanger bg-kumoDanger-tint text-kumoText-danger'
+                  : 'border-kumo-line bg-white text-kumo-text-subtle'
             }`}
           >
             {lastCheck ? (lastCheck.passed ? `i = ${lastCheck.i} ✓` : 'i = 6 ✗ Stop') : 'i = 1'}
@@ -273,12 +273,14 @@ function LoopFlowVisual() {
         </div>
 
         {/* Printed output */}
-        <div className="rounded-lg border border-white/10 bg-slate-950 p-3 text-right">
-          <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Printed</div>
+        <div className="rounded-xl border border-kumo-hairline bg-kumo-tint p-3 text-right">
+          <div className="mb-1 text-xs font-medium uppercase tracking-wide text-kumo-text-subtle">
+            Printed
+          </div>
           <div className="min-h-[64px] text-left font-mono text-sm">
-            {printed.length === 0 && <span className="text-slate-600">—</span>}
+            {printed.length === 0 && <span className="text-kumo-text-subtle">—</span>}
             {printed.map((n) => (
-              <div key={n} className="animate-fade-in text-emerald-300">
+              <div key={n} className="animate-fade-in text-kumoText-info">
                 {n}
               </div>
             ))}
@@ -287,12 +289,12 @@ function LoopFlowVisual() {
       </div>
 
       {lastCheck?.printing && (
-        <p className="mt-3 text-center text-sm text-emerald-300 animate-fade-in">
+        <p className="mt-3 animate-fade-in text-center text-sm font-medium text-kumoText-info">
           i = {lastCheck.i} → condition true → print {lastCheck.i}
         </p>
       )}
       {lastCheck && !lastCheck.passed && (
-        <p className="mt-3 text-center text-sm text-rose-300 animate-fade-in">
+        <p className="mt-3 animate-fade-in text-center text-sm font-medium text-kumoText-danger">
           i = 6 → condition false → loop stops
         </p>
       )}
@@ -320,7 +322,7 @@ function StepDots({ total, current, compact }: { total: number; current: number;
         <span
           key={i}
           className={`h-1.5 rounded-full transition-all ${
-            i < current ? 'w-4 bg-emerald-400' : 'w-1.5 bg-white/15'
+            i < current ? 'w-4 bg-kumo-brand' : 'w-1.5 bg-kumo-fill'
           }`}
         />
       ))}
@@ -328,7 +330,16 @@ function StepDots({ total, current, compact }: { total: number; current: number;
   );
 }
 
-export default function VisualExplanation({ type }: { type: VisualType }) {
+export default function VisualExplanation({
+  type,
+  onActive,
+}: {
+  type: VisualType;
+  onActive?: () => void;
+}) {
+  useEffect(() => {
+    onActive?.();
+  }, []);
   switch (type) {
     case 'interaction':
       return <InteractionVisual />;

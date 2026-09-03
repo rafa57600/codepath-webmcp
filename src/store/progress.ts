@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { courses } from '../data/javascript';
-import type { Lesson, ExerciseResult, QuizResult } from '../types';
+import type { Lesson, ExerciseResult, QuizResult, ActiveStep, LearningActivity } from '../types';
 
 export interface Attempt {
   exerciseId: string;
@@ -26,6 +26,12 @@ interface ProgressState {
   studentCode: Record<string, string>;
   tutorMode: 'guide' | 'balanced' | 'explain';
 
+  // Active learning cursor — what step the learner is on and what they're doing
+  // right now. Persisted (with the rest of the learning state) so an agent still
+  // understands roughly where the learner was after a reload.
+  activeStep: ActiveStep | null;
+  currentActivity: LearningActivity | null;
+
   // actions
   setCourse: (courseId: string) => void;
   setCurrentLesson: (lessonId: string) => void;
@@ -35,6 +41,8 @@ interface ProgressState {
   recordQuiz: (lessonId: string, quiz: QuizResult) => void;
   setStudentCode: (exerciseId: string, code: string) => void;
   setTutorMode: (mode: 'guide' | 'balanced' | 'explain') => void;
+  setActiveStep: (activeStep: ActiveStep) => void;
+  setCurrentActivity: (activity: LearningActivity | null) => void;
   resetProgress: () => void;
 }
 
@@ -65,10 +73,13 @@ export const useProgress = create<ProgressState>()(
       recentMistakes: [],
       studentCode: {},
       tutorMode: 'guide',
+      activeStep: null,
+      currentActivity: null,
 
       setCourse: (courseId) => set({ courseId }),
 
-      setCurrentLesson: (lessonId) => set({ currentLessonId: lessonId }),
+      setCurrentLesson: (lessonId) =>
+        set({ currentLessonId: lessonId, activeStep: null, currentActivity: null }),
 
       completeLesson: (lessonId) =>
         set((state) => ({
@@ -135,6 +146,10 @@ export const useProgress = create<ProgressState>()(
 
       setTutorMode: (mode) => set({ tutorMode: mode }),
 
+      setActiveStep: (activeStep) => set({ activeStep }),
+
+      setCurrentActivity: (activity) => set({ currentActivity: activity }),
+
       resetProgress: () =>
         set({
           currentLessonId: 'introduction',
@@ -144,10 +159,23 @@ export const useProgress = create<ProgressState>()(
           attempts: [],
           recentMistakes: [],
           studentCode: {},
+          activeStep: null,
+          currentActivity: null,
         }),
     }),
     {
       name: 'codepath-progress',
+      // On hydration, drop transient states that cannot survive a reload.
+      // `running_code` means "code is executing right now" — a reload means that
+      // execution is gone, so normalize it to the stable post-run activity
+      // rather than claiming a live action that is not happening.
+      merge: (persisted, current) => {
+        const base = { ...(current as object), ...((persisted as object) ?? {}) } as ProgressState;
+        if (base.currentActivity === 'running_code') {
+          base.currentActivity = 'reviewing_feedback';
+        }
+        return base;
+      },
     }
   )
 );

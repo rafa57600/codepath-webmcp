@@ -2,17 +2,202 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =========================================================================
+   CodePath — following Cloudflare Kumo design-system rules
+   (semantic kumo-* tokens only; light mode)
+
+   Rules honoured:
+   - Only semantic tokens (kumo-base/elevated/recessed/tint/contrast,
+     text-kumo-*, kumoInfo/kumoSuccess/kumoWarning/kumoDanger + -tint,
+     hairline/line borders). Named by ROLE, not hue.
+   - No raw Tailwind colours, no `dark:` variants (light-only here).
+   - Surface hierarchy: canvas -> base -> elevated -> recessed -> tint -> contrast.
+   ========================================================================= */
+
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+  --bg: oklch(98.75% 0 0); /* kumo-canvas */
+  --panel: #ffffff; /* kumo-base */
+  --border: oklch(93.5% 0 0); /* kumo-hairline */
+  --ink: oklch(21% 0.006 285.885); /* text-kumo-default */
+  --muted: oklch(55.6% 0 0); /* text-kumo-subtle */
+  --accent: oklch(0.5772 0.2324 260); /* kumo-brand (Cloudflare blue) */
+  --accent-soft: oklch(93.2% 0.032 255.6 / 0.45); /* kumo-info-tint */
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background: #020617;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px; /* Kumo base */
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* ---- Visual explanation custom animation classes ---- */
+/* -------------------------------------------------------------------------
+   Reusable component classes (Kumo semantic tokens)
+   ------------------------------------------------------------------------- */
+
+@layer components {
+  /* Surface / card */
+  .card {
+    @apply rounded-2xl border border-kumo-hairline bg-kumo-base shadow-card;
+  }
+  .card-pad {
+    @apply p-5;
+  }
+
+  /* Section label */
+  .section-label {
+    @apply text-xs font-semibold uppercase tracking-widest text-kumo-text-subtle;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-kumo-brand text-white shadow-sm hover:bg-kumo-brand-hover;
+  }
+  .btn-secondary {
+    @apply border border-kumo-hairline bg-kumo-control text-kumo-text-default hover:bg-kumo-tint;
+  }
+  .btn-ghost {
+    @apply text-kumo-text-default hover:bg-kumo-tint hover:text-kumo-text-strong;
+  }
+  .btn-success {
+    @apply bg-kumoSuccess text-white hover:bg-kumoSuccess;
+  }
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+
+  /* Chips / tags */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-kumo-hairline bg-kumo-base px-3 py-1 text-sm font-medium text-kumo-text-default transition-all;
+  }
+  .chip-active {
+    @apply border-kumo-brand bg-kumoInfo-tint text-kumoText-info;
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .badge-success {
+    @apply bg-kumoSuccess-tint text-kumoText-success;
+  }
+  .badge-muted {
+    @apply bg-kumo-tint text-kumo-text-subtle;
+  }
+  .badge-neutral {
+    @apply border border-kumo-hairline bg-kumo-tint text-kumo-text-subtle;
+  }
+  .badge-amber {
+    @apply bg-kumoWarning-tint text-kumoText-warning;
+  }
+
+  /* Progress bar */
+  .progress-track {
+    @apply h-1.5 w-full overflow-hidden rounded-full bg-kumo-fill;
+  }
+  .progress-fill {
+    @apply h-full rounded-full bg-kumo-brand transition-all duration-500;
+  }
+
+  /* Section header */
+  .section-header {
+    @apply mb-4 flex items-center gap-2 text-lg font-semibold text-kumo-text-strong;
+  }
+  .section-header .section-icon {
+    @apply flex h-7 w-7 items-center justify-center rounded-lg bg-kumoInfo-tint text-kumoText-info;
+  }
+
+  /* Code block (read-only example) */
+  .code-block {
+    @apply overflow-x-auto rounded-xl border border-kumo-hairline bg-kumo-recessed p-4 font-mono text-sm text-kumo-text-strong;
+  }
+
+  /* Lesson sidebar nav items */
+  .nav-item {
+    @apply flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors;
+  }
+  .nav-item .step-num {
+    @apply font-mono text-xs text-kumo-text-subtle;
+  }
+  .nav-item-complete {
+    @apply text-kumo-text-subtle hover:bg-kumo-tint;
+  }
+  .nav-item-current {
+    @apply bg-kumo-tint text-kumo-text-strong ring-1 ring-inset ring-kumo-hairline;
+  }
+  .nav-item-upcoming {
+    @apply text-kumo-text-default hover:bg-kumo-tint;
+  }
+
+  /* Empty state */
+  .empty-state {
+    @apply rounded-xl border border-dashed border-kumo-line bg-kumo-tint px-4 py-3 text-sm text-kumo-text-subtle;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Visual explanation component styles (Kumo tokens, logic unchanged)
+   ------------------------------------------------------------------------- */
+
+/* Flow step arrows */
+.step-arrow { @apply flex flex-col items-center; }
+.step-arrow .arrow-line { @apply h-4 w-px bg-kumo-brand transition-colors; }
+.step-arrow .arrow-line.dim { @apply bg-kumo-line; }
+.step-arrow .arrow-head { @apply text-kumo-brand transition-colors; }
+.step-arrow .arrow-head.dim { @apply text-kumo-text-inactive; }
+
+/* Variable box */
+.box-wrap {
+  @apply relative w-48 rounded-xl border-2 border-dashed border-kumo-line bg-kumo-tint p-4 text-center transition-all duration-500;
+}
+.box-wrap.box-filled {
+  @apply border-solid border-kumo-brand bg-kumoInfo-tint;
+}
+.box-label {
+  @apply absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-kumo-contrast px-2 py-0.5 font-mono text-xs text-kumo-text-inverse;
+}
+.box-value {
+  @apply mt-2 font-mono text-lg text-kumoText-info;
+}
+
+/* Condition tree */
+.tree-active { @apply bg-kumo-brand transition-colors; }
+.branch-connector { @apply h-4 w-px bg-kumo-line transition-colors; }
+.outcome-active { @apply scale-105 font-semibold shadow-sm; }
+
+/* Pre/Code used inside visual explanations */
+.visual-code {
+  @apply rounded-xl border border-kumo-hairline bg-kumo-base p-3 font-mono text-sm text-kumo-text-strong shadow-card;
+}
+.visual-chip {
+  @apply inline-flex items-center rounded-lg border border-kumo-hairline bg-kumo-base px-3 py-1.5 text-sm font-medium text-kumo-text-default shadow-sm;
+}
+.visual-chip.active {
+  @apply border-kumo-brand bg-kumoInfo-tint text-kumoText-info;
+}
+.visual-tag {
+  @apply inline-flex items-center rounded-lg bg-kumo-tint px-3 py-1 font-mono text-sm text-kumo-text-default;
+}
+.visual-tag.highlight {
+  @apply bg-kumoInfo-tint text-kumoText-info;
+}
+
+/* -------------------------------------------------------------------------
+   Motion
+   ------------------------------------------------------------------------- */
 
 @keyframes ping-once {
   0% { transform: scale(1); }
@@ -27,42 +212,9 @@ body {
 }
 .animate-fade-in { animation: fade-in 0.4s ease both; }
 
-.chip {
-  @apply rounded-md border border-white/10 bg-slate-800 px-3 py-1.5 text-sm text-slate-400 transition-all duration-300;
-}
-.chip-active {
-  @apply border-emerald-400/40 bg-emerald-500/15 text-emerald-200;
-}
-
-.step-arrow { @apply flex flex-col items-center; }
-.step-arrow .arrow-line { @apply h-4 w-px bg-emerald-400 transition-colors; }
-.step-arrow .arrow-line.dim { @apply bg-white/10; }
-.step-arrow .arrow-head { @apply text-emerald-400 transition-colors; }
-.step-arrow .arrow-head.dim { @apply text-white/10; }
-
-/* Variable box */
-.box-wrap {
-  @apply relative w-48 rounded-lg border-2 border-dashed border-white/25 bg-slate-950 p-4 text-center transition-all duration-500;
-}
-.box-wrap.box-filled {
-  @apply border-solid border-indigo-400/60 bg-indigo-500/10;
-}
-.box-label {
-  @apply absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-700 px-2 py-0.5 text-xs font-mono text-white;
-}
-.box-value {
-  @apply mt-2 font-mono text-lg text-emerald-300;
-}
-
-.code-snippet {
-  @apply rounded-md bg-slate-950 px-3 py-2 font-mono text-sm text-emerald-200;
-}
-
-/* Condition tree */
-.tree-active { @apply bg-emerald-400 transition-colors; }
-.branch-connector { @apply h-4 w-px bg-white/20 transition-colors; }
-.outcome-active { @apply scale-105 font-semibold; }
-
-/* CodeMirror tweaks */
-.cm-editor { font-size: 14px; border-radius: 8px; overflow: hidden; }
+/* -------------------------------------------------------------------------
+   CodeMirror — light editor theme (defined in CodeEditor.tsx)
+   Kept for the editor frame only.
+   ------------------------------------------------------------------------- */
+.cm-editor { font-size: 14px; border-radius: 10px; overflow: hidden; }
 .cm-editor .cm-scroller { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; }

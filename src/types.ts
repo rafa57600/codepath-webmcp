@@ -84,3 +84,41 @@ export interface QuizResult {
   correct: boolean;
   selectedId: string;
 }
+
+// ---------------------------------------------------------------------------
+// Active learning cursor — tells the AI tutor exactly which step the learner is
+// currently on and what kind of step it is. These types correspond 1:1 to the
+// step kinds the UI actually renders (see src/lib/unlock.ts). We never invent a
+// step type the UI does not produce.
+// ---------------------------------------------------------------------------
+
+/** The kinds of learning steps the UI renders (normalized for the agent). */
+export type LearningStepType =
+  | 'explanation'
+  | 'visual'
+  | 'example'
+  | 'practice' // the "Try it yourself" playground
+  | 'exercise'
+  | 'challenge' // final exercise of a lesson, labelled "Challenge" in the UI
+  | 'quiz';
+
+/** What the learner is doing RIGHT NOW (lightweight, not analytics). */
+export type LearningActivity =
+  | 'reading'
+  | 'viewing_visual'
+  | 'viewing_example'
+  | 'editing_code'
+  | 'running_code'
+  | 'solving_exercise'
+  | 'reviewing_feedback'
+  | 'answering_quiz';
+
+/** The persisted active-step cursor for the current lesson. */
+export interface ActiveStep {
+  /** Stable step key within the lesson ('explanation' | 'visual' | 'example' | 'tryit' | <exerciseId> | 'quiz'). */
+  stepId: string;
+  type: LearningStepType;
+  title: string;
+  /** 0-based index in the lesson step sequence. */
+  index: number;
+}

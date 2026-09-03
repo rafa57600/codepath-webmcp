@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Home } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useProgress } from '../store/progress';
 import { javascriptCourse } from '../data/javascript';
 import Sidebar from './Sidebar';
 import LessonView from './LessonView';
-import TutorPanel from './TutorPanel';
+import TopBar from './TopBar';
 import DebugPanel from './DebugPanel';
 import {
   registerBrowserWebmcp,
@@ -14,6 +13,7 @@ import {
 } from '../lib/webmcp-browser';
 import { toolMetadata } from '../lib/webmcp';
 import { syncToServer } from '../lib/sync';
+import { activeStepIndex, stepsForLesson } from '../lib/unlock';
 
 function snapshotForSync() {
   const s = useProgress.getState();
@@ -27,17 +27,25 @@ function snapshotForSync() {
     recentMistakes: s.recentMistakes,
     studentCode: s.studentCode,
     tutorMode: s.tutorMode,
+    activeStep: s.activeStep,
+    currentActivity: s.currentActivity,
   };
 }
 
 export default function CourseView({ onExit }: { onExit: () => void }) {
   const currentLessonId = useProgress((s) => s.currentLessonId);
   const completedLessons = useProgress((s) => s.completedLessons);
-  const resetProgress = useProgress((s) => s.resetProgress);
+  const completedExercises = useProgress((s) => s.completedExercises);
   const [showDebug, setShowDebug] = useState(false);
-  const [status, setStatus] = useState<WebmcpStatus>(() =>
-    getWebmcpStatus()
-  );
+  const [status, setStatus] = useState<WebmcpStatus>(() => getWebmcpStatus());
+  const mainRef = useRef<HTMLElement | null>(null);
+
+  // When the active lesson changes (sidebar click, next/prev, WebMCP open_lesson),
+  // reset the scroll container to the top so the reader starts at the lesson head
+  // instead of lingering where the previous lesson's content ended.
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+  }, [currentLessonId]);
 
   useEffect(() => {
     // Real browser WebMCP registration (only registers if document.modelContext
@@ -62,75 +70,52 @@ export default function CourseView({ onExit }: { onExit: () => void }) {
   const progressPercent = Math.round((completedCount / totalLessons) * 100);
 
   const currentIndex = javascriptCourse.lessons.findIndex((l) => l.id === currentLessonId);
-  const currentTitle = javascriptCourse.lessons[currentIndex]?.title;
+  const currentLesson = javascriptCourse.lessons[currentIndex];
+  const courseTitle = javascriptCourse.title;
+
+  // Current activity label for the WebMCP popover's "current context". Prefer the
+  // live learning cursor (active step + activity) when available; fall back to the
+  // furthest unlocked step title.
+  const activeStep = useProgress((s) => s.activeStep);
+  const currentActivity = useProgress((s) => s.currentActivity);
+  let activity = 'Lesson intro';
+  if (currentLesson) {
+    if (activeStep) {
+      const stepTitle = activeStep.title;
+      activity = currentActivity ? `${stepTitle} · ${currentActivity}` : stepTitle;
+    } else {
+      const active = activeStepIndex(currentLesson, completedExercises);
+      const step = stepsForLesson(currentLesson)[active];
+      activity = step ? step.title : '—';
+    }
+  }
 
   return (
-    <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
-      {/* Top bar */}
-      <header className="flex items-center justify-between border-b border-white/10 bg-slate-900/70 px-4 py-2.5">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onExit}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-slate-400 hover:bg-white/10 hover:text-white"
-          >
-            <Home size={15} /> Home
-          </button>
-          <span className="hidden text-sm font-semibold text-white sm:inline">CodePath</span>
-        </div>
+    <div className="flex h-screen flex-col bg-kumo-canvas text-kumo-text-default">
+      <TopBar
+        onExit={onExit}
+        progressPercent={progressPercent}
+        lessonPathLabel={`${courseTitle} / ${currentLesson?.title ?? ''}`}
+        status={status}
+        onOpenDebug={() => setShowDebug(true)}
+        context={{
+          courseTitle,
+          lessonTitle: currentLesson?.title ?? '—',
+          activity,
+        }}
+      />
 
-        <div className="flex-1 max-w-xs px-4">
-          <div className="mb-1 flex items-center justify-between text-xs">
-            <span className="text-slate-400">
-              Lesson {currentIndex + 1}/{totalLessons} · {currentTitle}
-            </span>
-            <span className="font-semibold text-indigo-300">{progressPercent}%</span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400 transition-all duration-500"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowDebug(true)}
-            title={status.mode === 'browser-webmcp'
-              ? 'WebMCP is available and all tools are registered via document.modelContext'
-              : 'WebMCP unavailable in this browser. Enable chrome://flags/#enable-webmcp-testing in Chrome 149+. Tools remain callable via the window.__webmcp dev bridge for testing.'}
-            className={
-              'hidden rounded-md border px-3 py-1.5 text-xs font-medium sm:block ' +
-              (status.mode === 'browser-webmcp'
-                ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
-                : 'border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20')
-            }
-          >
-            {status.mode === 'browser-webmcp'
-              ? `● WebMCP Ready · ${status.count} tools`
-              : '○ WebMCP unavailable'}
-          </button>
-          <button
-            onClick={() => {
-              if (window.confirm('Reset all progress?')) resetProgress();
-            }}
-            className="rounded-md px-2 py-1 text-xs text-slate-500 hover:text-white"
-          >
-            Reset
-          </button>
-        </div>
-      </header>
-
-      {/* Body */}
+      {/* Body: compact left nav + centered content (no permanent right panel) */}
       <div className="flex flex-1 flex-col overflow-hidden md:flex-row">
         <Sidebar currentLessonId={currentLessonId} />
-        <main className="flex-1 overflow-y-auto">
+        <main ref={mainRef} data-scroll className="flex-1 overflow-y-auto">
           <LessonView key={currentLessonId} lessonId={currentLessonId} />
         </main>
-        <TutorPanel status={status} onOpenDebug={() => setShowDebug(true)} />
       </div>
 
-      {showDebug && <DebugPanel tools={toolMetadata()} status={status} onClose={() => setShowDebug(false)} />}
+      {showDebug && (
+        <DebugPanel tools={toolMetadata()} status={status} onClose={() => setShowDebug(false)} />
+      )}
     </div>
   );
 }

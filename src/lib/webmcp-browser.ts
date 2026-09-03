@@ -57,6 +57,8 @@ function snapshot(): SessionState {
     recentMistakes: s.recentMistakes,
     studentCode: s.studentCode,
     tutorMode: s.tutorMode,
+    activeStep: s.activeStep,
+    currentActivity: s.currentActivity,
   };
 }
 
@@ -124,7 +126,11 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         (a?.exerciseId
           ? state.studentCode[a.exerciseId as string] ?? found?.tryIt.starterCode ?? ''
           : found?.tryIt.starterCode ?? '');
+      // Keep the learning cursor honest: the learner just ran code (or is now
+      // reviewing the output). Non-essential but cheap and truthful.
+      useProgress.getState().setCurrentActivity('running_code');
       const result = await runUserCode(code);
+      useProgress.getState().setCurrentActivity('reviewing_feedback');
       return {
         success: result.success,
         stdout: result.stdout,
@@ -147,7 +153,9 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         return { error: 'Exercise not found.' };
       }
       const code = state.studentCode[exercise.id] ?? exercise.starterCode;
+      useProgress.getState().setCurrentActivity('solving_exercise');
       const result = await validateSolution(lesson, exercise, code);
+      useProgress.getState().setCurrentActivity('reviewing_feedback');
       // Record the attempt in real state (mutating action — allowed for this tool).
       useProgress.getState().recordExerciseResult(
         {

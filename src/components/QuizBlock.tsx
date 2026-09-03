@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, XCircle } from 'lucide-react';
+import { CheckCircle2, XCircle, HelpCircle } from 'lucide-react';
 import type { Quiz, QuizResult } from '../types';
 
 interface QuizProps {
@@ -7,13 +7,16 @@ interface QuizProps {
   lessonId: string;
   onAnswer: (lessonId: string, result: QuizResult) => void;
   initialResult?: QuizResult;
+  /** Called when the learner enters/interacts with the quiz so the cursor updates. */
+  onActive?: () => void;
 }
 
-export default function QuizBlock({ quiz, lessonId, onAnswer, initialResult }: QuizProps) {
+export default function QuizBlock({ quiz, lessonId, onAnswer, initialResult, onActive }: QuizProps) {
   const [result, setResult] = useState<QuizResult | null>(initialResult ?? null);
 
   const choose = (optionId: string) => {
     if (result) return; // locked after answer
+    onActive?.();
     const correct = optionId === quiz.correctId;
     const res: QuizResult = { correct, selectedId: optionId };
     setResult(res);
@@ -23,36 +26,38 @@ export default function QuizBlock({ quiz, lessonId, onAnswer, initialResult }: Q
   const isCorrect = result?.correct;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-slate-900 p-5">
+    <div className="card p-5">
       <div className="mb-3 flex items-center gap-2">
-        <span className="rounded bg-white/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
-          Mini quiz
+        <span className="inline-flex items-center gap-1.5 rounded-lg bg-kumoInfo-tint px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-kumoText-info">
+          <HelpCircle size={13} /> Mini quiz
         </span>
       </div>
 
-      <p className="mb-4 text-lg font-medium text-white">{quiz.question}</p>
+      <p className="mb-4 text-lg font-semibold text-kumo-text-strong">{quiz.question}</p>
 
       <div className="space-y-2">
         {quiz.options.map((opt) => {
           const isSelected = result?.selectedId === opt.id;
           const isCorrectOpt = opt.id === quiz.correctId;
-          let cls = 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10';
+          let cls = 'border-kumo-hairline bg-white text-kumo-text-default hover:border-kumo-line hover:bg-kumo-tint';
           if (result) {
-            if (isCorrectOpt) cls = 'border-emerald-400/50 bg-emerald-400/10 text-emerald-200';
-            else if (isSelected) cls = 'border-rose-400/50 bg-rose-400/10 text-rose-200';
-            else cls = 'border-white/10 bg-white/5 text-slate-400 opacity-60';
+            if (isCorrectOpt) cls = 'border-kumo-brand bg-kumoInfo-tint text-kumoText-info';
+            else if (isSelected) cls = 'border-kumoDanger bg-kumoDanger-tint text-kumoText-danger';
+            else cls = 'border-kumo-hairline bg-white text-kumo-text-subtle opacity-60';
           }
           return (
             <button
               key={opt.id}
               onClick={() => choose(opt.id)}
               disabled={!!result}
-              className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left text-sm transition-colors ${cls}`}
+              className={`flex w-full items-center justify-between gap-2 rounded-xl border px-4 py-3 text-left text-sm transition-colors ${cls}`}
             >
               <span>{opt.text}</span>
-              {result && isCorrectOpt && <CheckCircle2 size={18} className="text-emerald-400" />}
+              {result && isCorrectOpt && (
+                <CheckCircle2 size={18} className="shrink-0 text-kumo-brand" />
+              )}
               {result && isSelected && !isCorrectOpt && (
-                <XCircle size={18} className="text-rose-400" />
+                <XCircle size={18} className="shrink-0 text-kumoDanger" />
               )}
             </button>
           );
@@ -61,13 +66,20 @@ export default function QuizBlock({ quiz, lessonId, onAnswer, initialResult }: Q
 
       {result && (
         <div
-          className={`mt-4 rounded-lg border p-3 text-sm ${
+          className={`mt-4 rounded-xl border p-3.5 text-sm ${
             isCorrect
-              ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
-              : 'border-rose-400/40 bg-rose-400/10 text-rose-200'
+              ? 'border-kumo-brand bg-kumoInfo-tint text-kumoText-info'
+              : 'border-kumoDanger bg-kumoDanger-tint text-kumoText-danger'
           }`}
         >
-          {isCorrect ? '✓ Correct! ' : '✗ Not quite. '}
+          <div className="mb-0.5 flex items-center gap-1.5 font-semibold">
+            {isCorrect ? (
+              <CheckCircle2 size={15} className="text-kumo-brand" />
+            ) : (
+              <XCircle size={15} className="text-kumoDanger" />
+            )}
+            {isCorrect ? 'Correct!' : 'Not quite.'}
+          </div>
           {quiz.explanation}
         </div>
       )}

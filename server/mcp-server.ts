@@ -12,6 +12,16 @@ import { z } from 'zod';
 import vm from 'node:vm';
 import { loadState, saveState } from './state.js';
 import { javascriptCourse } from '../src/data/javascript';
+import {
+  stepsForLesson,
+  activeStepIndex,
+  isStepLocked,
+  activeStepAt,
+  defaultActiveStep,
+  isExerciseLikeStep,
+  learningStepType,
+} from '../src/lib/unlock';
+import type { ServerState } from './state.js';
 
 const server = new McpServer({
   name: 'codepath',
@@ -28,6 +38,28 @@ function findLesson(lessonId: string) {
   const idx = javascriptCourse.lessons.findIndex((l) => l.id === lessonId);
   if (idx < 0) return null;
   return { lesson: javascriptCourse.lessons[idx], index: idx };
+}
+
+/**
+ * Resolve the effective active step for the current lesson. Prefers the live
+ * cursor when it is valid & reachable; otherwise falls back to the furthest
+ * unlocked step derived from real progress.
+ */
+function resolveActiveStep(
+  state: ServerState,
+  lesson: (typeof javascriptCourse)['lessons'][number]
+) {
+  const steps = stepsForLesson(lesson);
+  const furthestActive = activeStepIndex(lesson, state.completedExercises);
+  const cursor = state.activeStep;
+  const inLesson =
+    cursor &&
+    cursor.index >= 0 &&
+    cursor.index < steps.length &&
+    steps[cursor.index].key === cursor.stepId;
+  const cursorReachable = inLesson && !isStepLocked(lesson, state.completedExercises, cursor!.index);
+  const choice = cursorReachable ? cursor! : activeStepAt(lesson, furthestActive);
+  return choice ?? defaultActiveStep(lesson, state.completedExercises);
 }
 
 function runInVm(code: string): { success: boolean; stdout: string[]; runtimeError: string | null } {
@@ -86,17 +118,25 @@ server.registerTool(
 
 server.registerTool(
   'get_current_lesson',
-  { description: 'Return the current lesson (objective, summary, concepts).' },
+  { description: 'Return the current lesson (objective, summary, concepts) plus the active learning step and activity.' },
   async () => {
     const state = await loadState();
     const found = findLesson(state.currentLessonId);
     if (!found) return textResult({ error: 'Lesson not found.' });
+    const active = resolveActiveStep(state, found.lesson);
     return textResult({
       id: found.lesson.id,
       title: found.lesson.title,
       learningObjective: found.lesson.objective,
       summary: found.lesson.summary,
       concepts: found.lesson.concepts,
+      activeStep: {
+        id: active.stepId,
+        type: active.type,
+        title: active.title,
+        index: active.index,
+      },
+      currentActivity: state.currentActivity,
     });
   }
 );
@@ -104,29 +144,69 @@ server.registerTool(
 server.registerTool(
   'get_current_exercise',
   {
-    description: 'Return the current exercise and the student’s current code.',
+    description:
+      'Return the exercise the learner is actively working on, OR structured truth (active:false + current step) when they are NOT on an exercise/practice step. An explicit exerciseId always requests that exercise.',
     inputSchema: { exerciseId: z.string().optional() },
   },
   async ({ exerciseId }) => {
     const state = await loadState();
     const found = findLesson(state.currentLessonId);
     if (!found) return textResult({ error: 'Lesson not found.' });
-    let exercise = found.lesson.exercises.find((e) => e.id === exerciseId);
-    if (!exercise) {
-      exercise =
+
+    // Explicit exerciseId always honored.
+    if (exerciseId) {
+      const exercise = found.lesson.exercises.find((e) => e.id === exerciseId);
+      if (!exercise) return textResult({ error: `Exercise "${exerciseId}" not found in this lesson.` });
+      return textResult({
+        active: true,
+        exerciseId: exercise.id,
+        lesson: found.lesson.id,
+        lessonTitle: found.lesson.title,
+        instructions: exercise.instructions,
+        starterCode: exercise.starterCode,
+        studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+        difficulty: exercise.difficulty,
+        hint: exercise.hint ?? null,
+      });
+    }
+
+    const active = resolveActiveStep(state, found.lesson);
+
+    // Learner is on an exercise-like step → return it (practice has no tests).
+    if (isExerciseLikeStep(active.type)) {
+      if (active.type === 'practice' || active.stepId === 'tryit') {
+        return textResult({
+          active: true,
+          currentStepType: 'practice',
+          currentStepTitle: 'Try it yourself',
+          reason: "The learner is on the 'Try it yourself' playground step (no tests to submit).",
+          exerciseId: null,
+        });
+      }
+      const exercise =
+        found.lesson.exercises.find((e) => e.id === active.stepId) ??
         found.lesson.exercises.find((e) => !state.completedExercises.includes(e.id)) ??
         found.lesson.exercises[0];
+      if (!exercise) return textResult({ error: 'No exercise in this lesson.' });
+      return textResult({
+        active: true,
+        exerciseId: exercise.id,
+        lesson: found.lesson.id,
+        lessonTitle: found.lesson.title,
+        instructions: exercise.instructions,
+        starterCode: exercise.starterCode,
+        studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+        difficulty: exercise.difficulty,
+        hint: exercise.hint ?? null,
+      });
     }
-    if (!exercise) return textResult({ error: 'No exercise in this lesson.' });
+
+    // Not on an exercise step → structured truth.
     return textResult({
-      exerciseId: exercise.id,
-      lesson: found.lesson.id,
-      lessonTitle: found.lesson.title,
-      instructions: exercise.instructions,
-      starterCode: exercise.starterCode,
-      studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
-      difficulty: exercise.difficulty,
-      hint: exercise.hint ?? null,
+      active: false,
+      currentStepType: active.type,
+      currentStepTitle: active.title,
+      reason: `The learner is currently on a ${active.type} step ("${active.title}"), not an exercise.`,
     });
   }
 );
@@ -228,24 +308,106 @@ server.registerTool(
 server.registerTool(
   'get_learning_context',
   {
-    description: 'Return the learner’s full context: progress, mistakes, code, tutor mode.',
+    description:
+      'Read-only. Return exactly what the learner is currently doing in CodePath: active lesson, active learning step, activity type, code when relevant, progress, recent mistakes, and next step. Use this before tutoring.',
   },
   async () => {
     const state = await loadState();
     const found = findLesson(state.currentLessonId);
-    const currentExercise = found
-      ? found.lesson.exercises.find((e) => !state.completedExercises.includes(e.id)) ??
-        found.lesson.exercises[0]
-      : null;
+    if (!found) {
+      return textResult({ language: state.courseId, error: 'Current lesson not found.' });
+    }
+    const lesson = found.lesson;
+    const steps = stepsForLesson(lesson);
+    const active = resolveActiveStep(state, lesson);
+
+    const completedLessons = javascriptCourse.lessons
+      .filter((l) => state.completedLessons.includes(l.id))
+      .map((l) => l.id);
+    const coursePercent = javascriptCourse.lessons.length
+      ? Math.round((completedLessons.length / javascriptCourse.lessons.length) * 100)
+      : 0;
+    const lessonDone = lesson.exercises.filter((ex) => state.completedExercises.includes(ex.id)).length;
+    const lessonPercent = lesson.exercises.length
+      ? Math.round((lessonDone / lesson.exercises.length) * 100)
+      : 0;
+
+    const completedSteps = steps.slice(0, active.index).map((s) => ({
+      id: s.key,
+      type: learningStepType(s, lesson),
+      title: s.title,
+      index: steps.indexOf(s),
+    }));
+
+    let nextStep: { id: string; type: string; title: string; index: number; locked: boolean } | null = null;
+    const nextIndex = active.index + 1;
+    const next = steps[nextIndex];
+    if (next) {
+      nextStep = {
+        id: next.key,
+        type: learningStepType(next, lesson),
+        title: next.title,
+        index: nextIndex,
+        locked: isStepLocked(lesson, state.completedExercises, nextIndex),
+      };
+    }
+
+    let studentCode: string | null = null;
+    let studentCodeFor: string | null = null;
+    if (active.stepId === 'tryit') {
+      studentCode = lesson.tryIt.starterCode;
+      studentCodeFor = 'tryit';
+    } else if (isExerciseLikeStep(active.type)) {
+      const ex = lesson.exercises.find((e) => e.id === active.stepId);
+      if (ex) {
+        studentCode = state.studentCode[ex.id] ?? ex.starterCode;
+        studentCodeFor = ex.id;
+      }
+    }
+
+    const latestAttempt = state.attempts[0] ?? null;
+    const currentExercise =
+      isExerciseLikeStep(active.type) && active.stepId !== 'tryit'
+        ? (() => {
+            const ex = lesson.exercises.find((e) => e.id === active.stepId);
+            return ex
+              ? {
+                  active: true,
+                  exerciseId: ex.id,
+                  exercisesCompletedInLesson: lessonDone,
+                  exercisesTotalInLesson: lesson.exercises.length,
+                }
+              : { active: false };
+          })()
+        : { active: false };
+
     return textResult({
-      currentLesson: state.currentLessonId,
-      currentLessonTitle: found?.lesson.title ?? '',
-      completedTopics: state.completedLessons,
-      recentMistakes: state.recentMistakes.slice(0, 5),
-      currentStudentCode: currentExercise
-        ? state.studentCode[currentExercise.id] ?? currentExercise.starterCode
+      language: state.courseId,
+      lesson: { id: lesson.id, title: lesson.title },
+      currentStep: {
+        id: active.stepId,
+        type: active.type,
+        title: active.title,
+        index: active.index,
+        unlocked: !isStepLocked(lesson, state.completedExercises, active.index),
+      },
+      currentActivity: state.currentActivity,
+      studentCode,
+      studentCodeFor,
+      progress: { coursePercent, lessonPercent, completedLessons },
+      completedSteps,
+      nextStep,
+      currentExercise,
+      recentMistakes: state.recentMistakes.slice(0, 5).map((m) => ({ ...m })),
+      latestSubmission: latestAttempt
+        ? {
+            exerciseId: latestAttempt.exerciseId,
+            passed: latestAttempt.passed,
+            timestamp: latestAttempt.timestamp,
+          }
         : null,
       tutorMode: state.tutorMode,
+      quizResults: state.quizResults,
     });
   }
 );
