@@ -12,3 +12,4 @@ data/state.json
 
 
 .vercel
+.env*

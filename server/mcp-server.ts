@@ -112,7 +112,12 @@ function editorContext(
   };
 }
 
-function runInVm(code: string): { success: boolean; stdout: string[]; runtimeError: string | null } {
+function runInVm(code: string): {
+  success: boolean;
+  stdout: string[];
+  runtimeError: string | null;
+  variables: Record<string, unknown>;
+} {
   const stdout: string[] = [];
   const context: Record<string, unknown> = {
     console: {
@@ -129,14 +134,33 @@ function runInVm(code: string): { success: boolean; stdout: string[]; runtimeErr
     if (n !== 'console' && n !== 'window' && n !== 'document') context[n] = undefined;
   }
 
+  // Run the student code and read its declared variables in the SAME script,
+  // so top-level `let`/`const` are visible to the harvest reads (a separate
+  // directive/libeval would not see lexical bindings from a prior eval). In a
+  // vm Script a top-level `return` is illegal, so wrap in an IIFE whose return
+  // value is the harvested object.
+  const harvest =
+    names.size === 0
+      ? '{}'
+      : '{' +
+        Array.from(names)
+          .map((n) => `${JSON.stringify(n)}: (typeof ${n} !== 'undefined') ? ${n} : undefined`)
+          .join(',') +
+        '};';
+  const combined = '(function () {\n' + code + '\nreturn ' + harvest + '})()';
+
   try {
-    vm.runInNewContext(code, context, { timeout: 3000, filename: 'student.js' });
-    return { success: true, stdout, runtimeError: null };
+    const variables = (vm.runInNewContext(combined, context, {
+      timeout: 3000,
+      filename: 'student.js',
+    }) as Record<string, unknown> | null | undefined) ?? {};
+    return { success: true, stdout, runtimeError: null, variables };
   } catch (err) {
     return {
       success: false,
       stdout,
       runtimeError: err instanceof Error ? err.message : String(err),
+      variables: {},
     };
   }
 }
@@ -373,7 +397,8 @@ server.registerTool(
     }
 
     const run = runInVm(validatedCode);
-    const scope: Record<string, unknown> = { outputs: run.stdout };
+    const scope: Record<string, unknown> = { outputs: run.stdout, vars: run.variables };
+    for (const [k, v] of Object.entries(run.variables)) scope[k] = v;
     let testsPassed = 0;
     const failed: string[] = [];
     for (const test of exercise.tests) {

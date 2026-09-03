@@ -59,6 +59,13 @@ const IFRAME_SOURCE = `<!DOCTYPE html>
     __output.push('[error] ' + args.map(String).join(' '));
   };
 
+  // Variable harvesting deliver point. Learner code is evaluated together with an
+  // injected harvest-read block as ONE script (see handler below). Evaluating the
+  // reads in the same script - rather than in a separate second eval - is what
+  // makes top-level let/const declared by the learner visible to the harvest.
+  var __cpHarvested = {};
+  window.__cpDeliver = function (obj) { __cpHarvested = obj || {}; };
+
   window.addEventListener('message', function (e) {
     var data = e.data || {};
     if (!data || data.type !== 'codepath:run') return;
@@ -66,19 +73,20 @@ const IFRAME_SOURCE = `<!DOCTYPE html>
     var code = data.code;
     var names = data.declared || [];
     __output = [];
+    __cpHarvested = {};
     try {
-      (0, eval)(code);
-      var harvested = {};
-      var expr;
+      // Append one guarded read per declared name. The reads share the same
+      // script/global-lexical environment as the user code, so let/const/var
+      // (:name:) are all in scope when read. Undeclared names are skipped.
+      var reads = '';
       for (var i = 0; i < names.length; i++) {
-        try {
-          expr = 'typeof ' + names[i] + ' !== "undefined"';
-          if (eval(expr)) {
-            harvested[names[i]] = eval(names[i]);
-          }
-        } catch (err) { /* skip */ }
+        reads +=
+          '\nif (typeof ' + names[i] + ' !== "undefined") {' +
+          ' __cpHarvested[' + JSON.stringify(names[i]) + '] = ' + names[i] + '; }';
       }
-      channel.postMessage({ ok: true, output: __output, error: null, harvested: harvested });
+      var combined = code + '\n;' + reads + '\n;window.__cpDeliver(__cpHarvested);';
+      (0, eval)(combined);
+      channel.postMessage({ ok: true, output: __output, error: null, harvested: __cpHarvested });
     } catch (err) {
       channel.postMessage({
         ok: false,
@@ -138,24 +146,35 @@ async function ensureReady(): Promise<void> {
   if (readyPromise) await readyPromise;
 }
 
-function fallbackRun(code: string): RunResult {
+function fallbackRun(code: string, names: string[]): RunResult {
   // Last-resort execution if the iframe is unusable (e.g. srcdoc blocked):
   // run with a Function that captures console.log. Sandboxed within this page
   // scope is weaker, but never touches window/document of the app because code
   // is beginner-level and only console.log is used. Prefer the iframe path.
   try {
     const lines: string[] = [];
+    // Build a single function body that runs the user code AND returns the
+    // declared variables. Reusing the same scope means top-level let/const/var
+    // declared by the user are readable (mirrors the iframe fix).
+    const harvest =
+      '(function () { var o = {}; ' +
+      names
+        .map((n) => `if (typeof ${n} !== 'undefined') o[${JSON.stringify(n)}] = ${n};`)
+        .join(' ') +
+      ' return o; })()';
     // eslint-disable-next-line no-new-func
-    const fn = new Function(
-      'console',
-      code + '\n;return null;'
-    );
-    fn({
+    const fn = new Function('console', code + '\n;return ' + harvest + ';');
+    const vars = fn({
       log: (...a: unknown[]) =>
         lines.push(a.map((x) => (typeof x === 'object' ? JSON.stringify(x) : String(x))).join(' ')),
       error: (...a: unknown[]) => lines.push('[error] ' + a.map(String).join(' ')),
     });
-    return { success: true, stdout: lines, runtimeError: null, variables: {} };
+    return {
+      success: true,
+      stdout: lines,
+      runtimeError: null,
+      variables: vars && typeof vars === 'object' ? (vars as Record<string, unknown>) : {},
+    };
   } catch (err) {
     return {
       success: false,
@@ -175,7 +194,7 @@ export function runUserCode(
 
   const frame = getIframe();
   const win = frame.contentWindow;
-  if (!win) return Promise.resolve(fallbackRun(code));
+  if (!win) return Promise.resolve(fallbackRun(code, declared));
 
   return (async () => {
     // Wait for the sandbox to signal readiness.
@@ -187,7 +206,7 @@ export function runUserCode(
         ]);
       } catch {
         // Iframe never became ready; use the in-page fallback.
-        return fallbackRun(code);
+        return fallbackRun(code, declared);
       }
     }
 
