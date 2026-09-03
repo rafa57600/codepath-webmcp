@@ -59,6 +59,7 @@ function snapshot(): SessionState {
     tutorMode: s.tutorMode,
     activeStep: s.activeStep,
     currentActivity: s.currentActivity,
+    currentScreen: s.currentScreen,
   };
 }
 
@@ -66,6 +67,7 @@ const provider: StateProvider = {
   get: snapshot,
   setCurrentLesson: (lessonId) => useProgress.getState().setCurrentLesson(lessonId),
   setCourse: (courseId) => useProgress.getState().setCourse(courseId),
+  setScreen: (screen) => useProgress.getState().setScreen(screen),
 };
 
 function asRecord(args: unknown): Record<string, unknown> | undefined {
@@ -120,6 +122,12 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
     run_code: async (args) => {
       const a = asRecord(args);
       const state = snapshot();
+      // On the welcome screen there is no active code context. Do NOT silently
+      // run the first lesson's starter code. If the caller supplied explicit
+      // code/exerciseId, that is still a valid, truthful request.
+      if (state.currentScreen === 'welcome' && !a?.code && !a?.exerciseId) {
+        return { error: 'No active coding exercise. Open a lesson or exercise first.' };
+      }
       const found = javascriptCourse.lessons.find((l) => l.id === state.currentLessonId);
       const code =
         (a?.code as string) ??
@@ -145,6 +153,12 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
       const state = snapshot();
       const exerciseId = a?.exerciseId as string | undefined;
       const lessonId = a?.lessonId as string | undefined;
+      // On the welcome screen the learner has no active exercise. Only allow a
+      // submission when the caller explicitly names the exercise+lesson; never
+      // silently default to the first exercise of the first lesson.
+      if (state.currentScreen === 'welcome' && !exerciseId) {
+        return { error: 'No active coding exercise. Open a lesson or exercise first.' };
+      }
       const lesson =
         javascriptCourse.lessons.find((l) => l.id === lessonId) ??
         javascriptCourse.lessons.find((l) => l.id === state.currentLessonId);
@@ -273,6 +287,11 @@ function browserWebmcpRegisteredCount(): number {
   return registeredCount;
 }
 
+// Idempotency guard: register the 7 tools on document.modelContext at most once
+// per page load. Repeated calls (e.g. an App remount under hot reload, or a
+// careless re-run) must not accumulate duplicate tool registrations.
+let browserRegistrationDone = false;
+
 // ---------------------------------------------------------------------------
 // Browser-native registration — the WebMCP Challenge requirement.
 // ---------------------------------------------------------------------------
@@ -302,6 +321,16 @@ declare global {
  * expose it, nothing is registered and the status reports "unavailable".
  */
 export function registerBrowserWebmcp(): WebmcpStatus {
+  if (browserRegistrationDone) {
+    // Already registered once this page load — do not register again (would
+    // accumulate duplicate tools). Report the same status and let the UI refresh.
+    cachedStatus = detectStatus(registeredCount);
+    (window as any).dispatchEvent(
+      new CustomEvent('webmcp:status', { detail: cachedStatus })
+    );
+    return cachedStatus;
+  }
+  browserRegistrationDone = true;
   const ctx: ModelContextLike | undefined = document.modelContext;
   const handlers = buildToolHandlers();
   const meta = toolMetadata();

@@ -32,8 +32,17 @@ interface ProgressState {
   activeStep: ActiveStep | null;
   currentActivity: LearningActivity | null;
 
+  // Which app screen the learner is on — 'welcome' (landing page) or 'course'.
+  // This is TRANSIENT navigation state, NOT persisted: on every fresh load the
+  // app starts on the landing page, and persisting a stale 'course' would make
+  // a reload land back in the course. WebMCP reads this to report truthful
+  // context instead of pretending the learner is studying Introduction while
+  // they are still choosing a course.
+  currentScreen: 'welcome' | 'course';
+
   // actions
   setCourse: (courseId: string) => void;
+  setScreen: (screen: 'welcome' | 'course') => void;
   setCurrentLesson: (lessonId: string) => void;
   completeLesson: (lessonId: string) => void;
   recordExerciseResult: (result: ExerciseResult, lessonId: string, exerciseId: string) => void;
@@ -76,7 +85,11 @@ export const useProgress = create<ProgressState>()(
       activeStep: null,
       currentActivity: null,
 
+      currentScreen: 'welcome',
+
       setCourse: (courseId) => set({ courseId }),
+
+      setScreen: (screen) => set({ currentScreen: screen }),
 
       setCurrentLesson: (lessonId) =>
         set({ currentLessonId: lessonId, activeStep: null, currentActivity: null }),
@@ -175,6 +188,13 @@ export const useProgress = create<ProgressState>()(
           base.currentActivity = 'reviewing_feedback';
         }
         return base;
+      },
+      // currentScreen is transient navigation state — do NOT persist it. On a
+      // fresh load the app always begins on the landing (welcome) screen, so
+      // letting a stale persisted value survive would misroute the reload.
+      partialize: (state) => {
+        const { currentScreen, ...rest } = state;
+        return rest;
       },
     }
   )

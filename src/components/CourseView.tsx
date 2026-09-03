@@ -5,32 +5,9 @@ import Sidebar from './Sidebar';
 import LessonView from './LessonView';
 import TopBar from './TopBar';
 import DebugPanel from './DebugPanel';
-import {
-  registerBrowserWebmcp,
-  registerDevBridge,
-  getWebmcpStatus,
-  type WebmcpStatus,
-} from '../lib/webmcp-browser';
+import { getWebmcpStatus, type WebmcpStatus } from '../lib/webmcp-browser';
 import { toolMetadata } from '../lib/webmcp';
-import { syncToServer } from '../lib/sync';
 import { activeStepIndex, stepsForLesson } from '../lib/unlock';
-
-function snapshotForSync() {
-  const s = useProgress.getState();
-  return {
-    courseId: s.courseId,
-    currentLessonId: s.currentLessonId,
-    completedLessons: s.completedLessons,
-    completedExercises: s.completedExercises,
-    quizResults: s.quizResults,
-    attempts: s.attempts,
-    recentMistakes: s.recentMistakes,
-    studentCode: s.studentCode,
-    tutorMode: s.tutorMode,
-    activeStep: s.activeStep,
-    currentActivity: s.currentActivity,
-  };
-}
 
 export default function CourseView({ onExit }: { onExit: () => void }) {
   const currentLessonId = useProgress((s) => s.currentLessonId);
@@ -46,22 +23,6 @@ export default function CourseView({ onExit }: { onExit: () => void }) {
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, [currentLessonId]);
-
-  useEffect(() => {
-    // Real browser WebMCP registration (only registers if document.modelContext
-    // exists — never faked). Also register the dev/testing bridge on the
-    // window.__webmcp so our test harness can inspect the same shared handlers.
-    registerBrowserWebmcp();
-    registerDevBridge();
-    setStatus(getWebmcpStatus());
-    // Sync progress to the MCP server state file (best-effort, health-gated —
-    // never blocks or breaks the app if the optional server is not running).
-    const unsub = useProgress.subscribe(() => {
-      syncToServer(snapshotForSync());
-    });
-    syncToServer(snapshotForSync());
-    return unsub;
-  }, []);
 
   const totalLessons = javascriptCourse.lessons.length;
   const completedCount = javascriptCourse.lessons.filter((l) =>

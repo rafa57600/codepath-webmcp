@@ -29,12 +29,15 @@ export interface SessionState {
   tutorMode: 'guide' | 'balanced' | 'explain';
   activeStep: ActiveStep | null;
   currentActivity: LearningActivity | null;
+  /** Which app screen the learner is on: landing ('welcome') or in the course. */
+  currentScreen: 'welcome' | 'course';
 }
 
 export type StateProvider = {
   get: () => SessionState;
   setCurrentLesson: (lessonId: string) => void;
   setCourse: (courseId: string) => void;
+  setScreen: (screen: 'welcome' | 'course') => void;
 };
 
 export interface ToolResult {
@@ -80,6 +83,25 @@ export function getCourseProgress(state: SessionState): ToolResult {
   const progressPercent = lessons.length
     ? Math.round((completedLessons.length / lessons.length) * 100)
     : 0;
+  // If the learner is on the welcome screen, still expose real persisted
+  // progress but clearly indicate they are not inside a lesson right now.
+  if (state.currentScreen === 'welcome') {
+    const payload = {
+      screen: 'welcome',
+      language: state.courseId,
+      // Brand-new learners have no active lesson until they enter one.
+      currentLesson:
+        state.completedLessons.length || state.completedExercises.length
+          ? state.currentLessonId
+          : null,
+      progressPercent,
+      completedLessons,
+      completedExercises: state.completedExercises,
+      currentLessonTitle:
+        javascriptCourse.lessons.find((l) => l.id === state.currentLessonId)?.title ?? '',
+    };
+    return text(payload);
+  }
   const payload = {
     language: state.courseId,
     currentLesson: state.currentLessonId,
@@ -93,6 +115,14 @@ export function getCourseProgress(state: SessionState): ToolResult {
 }
 
 export function getCurrentLesson(state: SessionState): ToolResult {
+  // On the welcome/landing screen there is no active lesson — be truthful.
+  if (state.currentScreen === 'welcome') {
+    return text({
+      active: false,
+      screen: 'welcome',
+      reason: 'The learner has not entered a course lesson yet.',
+    });
+  }
   const found = findLesson(state.currentLessonId);
   if (!found) return text({ error: 'Current lesson not found.' });
   const active = resolveActiveStep(state, found.lesson);
@@ -114,6 +144,35 @@ export function getCurrentLesson(state: SessionState): ToolResult {
 }
 
 export function getCurrentExercise(state: SessionState, args?: { exerciseId?: string }): ToolResult {
+  // On the welcome screen the learner is not working on any exercise. Returning
+  // `active:false` is the honest answer; an explicitly-requested exerciseId may
+  // still be fetched (the agent asked for it by name), but we never silently
+  // default to "the first exercise".
+  if (state.currentScreen === 'welcome') {
+    if (args?.exerciseId) {
+      const found = findLesson(state.currentLessonId);
+      const exercise = found?.lesson.exercises.find((e) => e.id === args.exerciseId);
+      if (found && exercise) {
+        return text({
+          active: true,
+          exerciseId: exercise.id,
+          lesson: found.lesson.id,
+          lessonTitle: found.lesson.title,
+          instructions: exercise.instructions,
+          starterCode: exercise.starterCode,
+          studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+          difficulty: exercise.difficulty,
+          hint: exercise.hint ?? null,
+        });
+      }
+      return text({ error: `Exercise "${args.exerciseId}" not found.` });
+    }
+    return text({
+      active: false,
+      screen: 'welcome',
+      reason: 'The learner is not currently working on an exercise.',
+    });
+  }
   const found = findLesson(state.currentLessonId);
   if (!found) return text({ error: 'Lesson not found.' });
 
@@ -229,11 +288,48 @@ export function submitSolution(
 export function openLesson(provider: StateProvider, args: { lessonId: string }): ToolResult {
   const found = findLesson(args.lessonId);
   if (!found) return text({ error: `Lesson "${args.lessonId}" not found.` });
+  // Entering a lesson means entering the course screen. If the learner is on the
+  // welcome page, flip to the course so the lesson opens visibly. Safe to call
+  // unconditionally (idempotent when already in the course; the Node MCP server
+  // simply records the field with no UI to navigate).
+  provider.setScreen('course');
   provider.setCurrentLesson(args.lessonId);
   return text({ ok: true, opened: args.lessonId, title: found.lesson.title });
 }
 
 export function getLearningContext(state: SessionState): ToolResult {
+  // Welcome / landing screen: report truthful "choosing a course" context rather
+  // than pretending the learner is studying the first lesson.
+  if (state.currentScreen === 'welcome') {
+    const coursePercent = state.completedLessons.length
+      ? Math.round(
+          (javascriptCourse.lessons.filter((l) => state.completedLessons.includes(l.id)).length /
+            javascriptCourse.lessons.length) *
+            100
+        )
+      : 0;
+    return text({
+      screen: 'welcome',
+      language: null,
+      lesson: null,
+      currentStep: null,
+      currentActivity: 'choosing_course',
+      availableCourses: [
+        {
+          id: 'javascript',
+          title: 'JavaScript',
+          available: true,
+        },
+      ],
+      progress: {
+        coursePercent,
+        completedLessons: javascriptCourse.lessons
+          .filter((l) => state.completedLessons.includes(l.id))
+          .map((l) => l.id),
+      },
+      tutorMode: state.tutorMode,
+    });
+  }
   const found = findLesson(state.currentLessonId);
   if (!found) {
     return text({

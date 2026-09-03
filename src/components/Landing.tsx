@@ -9,12 +9,32 @@ import {
   Layers,
   PenLine,
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { courses } from '../data/javascript';
 import { useProgress } from '../store/progress';
+import { getWebmcpStatus, type WebmcpStatus } from '../lib/webmcp-browser';
 
 export default function Landing({ onStart }: { onStart: () => void }) {
   const setCourse = useProgress((s) => s.setCourse);
   const setCurrentLesson = useProgress((s) => s.setCurrentLesson);
+
+  // Real WebMCP status on the landing page. Registration happens once at App
+  // mount (after first paint), so listen for the 'webmcp:status' event that
+  // registration dispatches — the indicator must reflect whether the 7 tools
+  // are actually registered, NOT whether the user has entered the course.
+  const [status, setStatus] = useState<WebmcpStatus>(() => getWebmcpStatus());
+  useEffect(() => {
+    const onStatus = (e: Event) => {
+      const d = (e as CustomEvent<WebmcpStatus>).detail;
+      if (d) setStatus(d);
+    };
+    window.addEventListener('webmcp:status', onStatus);
+    // In case registration already completed before this effect subscribed.
+    const cur = getWebmcpStatus();
+    if (cur) setStatus(cur);
+    return () => window.removeEventListener('webmcp:status', onStatus);
+  }, []);
+  const webmcpReady = status.mode === 'browser-webmcp';
 
   const startJs = () => {
     setCourse('javascript');
@@ -34,6 +54,22 @@ export default function Landing({ onStart }: { onStart: () => void }) {
               <Sparkles size={14} />
               Built for humans &amp; AI agents to learn together
             </span>
+            <div className="mt-3">
+              {webmcpReady ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-kumo-hairline bg-white px-3 py-1 text-xs font-medium text-kumoText-info">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-kumo-brand opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-kumo-brand" />
+                  </span>
+                  WebMCP Ready · {status.count} tools
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-kumo-hairline bg-white px-3 py-1 text-xs font-medium text-kumo-text-subtle">
+                  <span className="h-2 w-2 rounded-full bg-kumo-text-inactive" />
+                  WebMCP unavailable in this browser
+                </span>
+              )}
+            </div>
             <h1 className="mt-6 text-4xl font-extrabold leading-[1.1] tracking-tight text-kumo-text-strong md:text-5xl">
               Learn programming from scratch, with an AI tutor in your corner.
             </h1>
