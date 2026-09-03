@@ -30,10 +30,14 @@ import {
   getCurrentExercise,
   openLesson,
   getLearningContext,
+  editorIdFor,
+  getTutorPolicy,
   type StateProvider,
   type SessionState,
 } from './webmcp';
 import type { ToolResult } from './webmcp';
+import type { LastRun, LastSubmission } from '../types';
+import { isExerciseLikeStep } from './unlock';
 
 // ---------------------------------------------------------------------------
 // Shared tool handlers — the single source of truth used by BOTH registration
@@ -60,6 +64,10 @@ function snapshot(): SessionState {
     activeStep: s.activeStep,
     currentActivity: s.currentActivity,
     currentScreen: s.currentScreen,
+    editorDrafts: s.editorDrafts,
+    activeEditorId: s.activeEditorId,
+    lastRun: s.lastRun,
+    lastSubmission: s.lastSubmission,
   };
 }
 
@@ -129,22 +137,66 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         return { error: 'No active coding exercise. Open a lesson or exercise first.' };
       }
       const found = javascriptCourse.lessons.find((l) => l.id === state.currentLessonId);
-      const code =
-        (a?.code as string) ??
-        (a?.exerciseId
-          ? state.studentCode[a.exerciseId as string] ?? found?.tryIt.starterCode ?? ''
-          : found?.tryIt.starterCode ?? '');
+
+      // Resolve which code to run. Priority:
+      //   1. explicit `code` argument
+      //   2. current active editor draft (explicit exerciseId OR the active step)
+      //   3. saved studentCode (legacy)
+      //   4. starter code only if no learner code exists
+      let code = found?.tryIt?.starterCode ?? '';
+      if (typeof a?.code === 'string' && a.code.trim() !== '') {
+        code = a.code;
+      } else {
+        // Determine the editor context: an explicit exerciseId OR the active step.
+        const active = useProgress.getState().activeStep;
+        let stepId: string | null = null;
+        if (typeof a?.exerciseId === 'string') {
+          const ex = found?.exercises.find((e) => e.id === a.exerciseId);
+          stepId = ex ? ex.id : a.exerciseId;
+        } else if (active) {
+          stepId =
+            active.stepId === 'tryit'
+              ? 'tryit'
+              : isExerciseLikeStep(active.type)
+                ? active.stepId
+                : 'tryit';
+        }
+        const editorKey = stepId
+          ? editorIdFor(state.courseId, state.currentLessonId, stepId)
+          : null;
+        const draft = editorKey ? state.editorDrafts[editorKey] : undefined;
+        if (draft) {
+          code = draft.code;
+        } else if (typeof a?.exerciseId === 'string' && state.studentCode[a.exerciseId]) {
+          code = state.studentCode[a.exerciseId];
+        }
+      }
+
       // Keep the learning cursor honest: the learner just ran code (or is now
       // reviewing the output). Non-essential but cheap and truthful.
       useProgress.getState().setCurrentActivity('running_code');
       const result = await runUserCode(code);
       useProgress.getState().setCurrentActivity('reviewing_feedback');
+      // Store structured lastRun context for tutoring.
+      const lastRun: LastRun = {
+        codeUsed: code,
+        success: result.success,
+        stdout: result.stdout,
+        runtimeError: result.runtimeError,
+        timestamp: Date.now(),
+      };
+      useProgress.getState().setLastRun(lastRun);
+      const tutorMode = useProgress.getState().tutorMode;
+      const tutorPolicy = getTutorPolicy(tutorMode);
       return {
         success: result.success,
         stdout: result.stdout,
         runtimeError: result.runtimeError,
         variables: result.variables,
+        codeUsed: code,
         exerciseId: a?.exerciseId ?? null,
+        tutorMode,
+        tutorPolicy,
       };
     },
 
@@ -166,7 +218,27 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
       if (!lesson || !exercise) {
         return { error: 'Exercise not found.' };
       }
-      const code = state.studentCode[exercise.id] ?? exercise.starterCode;
+
+      // Resolve which code to validate. Priority:
+      //   1. explicit `code` argument
+      //   2. the live editor draft for this exercise (what's visibly in CodeMirror)
+      //   3. saved studentCode (legacy)
+      //   4. starter only when truly untouched
+      let code: string;
+      if (typeof a?.code === 'string' && a.code.trim() !== '') {
+        code = a.code;
+      } else {
+        const editorKey = editorIdFor(state.courseId, lesson.id, exercise.id);
+        const draft = state.editorDrafts[editorKey];
+        if (draft) {
+          code = draft.code;
+        } else if (state.studentCode[exercise.id]) {
+          code = state.studentCode[exercise.id];
+        } else {
+          code = exercise.starterCode;
+        }
+      }
+
       useProgress.getState().setCurrentActivity('solving_exercise');
       const result = await validateSolution(lesson, exercise, code);
       useProgress.getState().setCurrentActivity('reviewing_feedback');
@@ -182,6 +254,23 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         lesson.id,
         exercise.id
       );
+      // Store structured lastSubmission context for tutoring.
+      const lastSubmission: LastSubmission = {
+        exerciseId: exercise.id,
+        codeUsed: code,
+        passed: result.passed,
+        testsPassed: result.testsPassed,
+        testsTotal: result.testsTotal,
+        failedTests: result.failedTests,
+        feedback: result.feedback,
+        hintContext: result.hintContext,
+        stdout: result.stdout,
+        runtimeError: result.runtimeError,
+        timestamp: Date.now(),
+      };
+      useProgress.getState().setLastSubmission(lastSubmission);
+      const tutorMode = useProgress.getState().tutorMode;
+      const tutorPolicy = getTutorPolicy(tutorMode);
       return {
         passed: result.passed,
         testsPassed: result.testsPassed,
@@ -189,8 +278,11 @@ export function buildToolHandlers(): Record<string, ToolHandler> {
         feedback: result.feedback,
         hintContext: result.hintContext,
         failedTests: result.failedTests.map((f) => f.description),
+        codeUsed: code,
         exerciseId: exercise.id,
         lesson: lesson.id,
+        tutorMode,
+        tutorPolicy,
       };
     },
 

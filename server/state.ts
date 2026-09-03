@@ -34,6 +34,37 @@ export interface ServerState {
     | 'reviewing_feedback'
     | 'answering_quiz'
     | null;
+  // Live editor state — mirrors the browser's authoritative drafts.
+  editorDrafts: Record<string, {
+    code: string;
+    lessonId: string;
+    stepId: string;
+    exerciseId: string | null;
+    starterCode: string;
+    dirty: boolean;
+    lastEditedAt: number;
+  }>;
+  activeEditorId: string | null;
+  lastRun: {
+    codeUsed: string;
+    success: boolean;
+    stdout: string[];
+    runtimeError: string | null;
+    timestamp: number;
+  } | null;
+  lastSubmission: {
+    exerciseId: string;
+    codeUsed: string;
+    passed: boolean;
+    testsPassed: number;
+    testsTotal: number;
+    failedTests: Array<{ id: string; description: string }>;
+    feedback: string;
+    hintContext: string;
+    stdout: string[];
+    runtimeError: string | null;
+    timestamp: number;
+  } | null;
 }
 
 const DEFAULT_STATE: ServerState = {
@@ -48,6 +79,10 @@ const DEFAULT_STATE: ServerState = {
   tutorMode: 'guide',
   activeStep: null,
   currentActivity: null,
+  editorDrafts: {},
+  activeEditorId: null,
+  lastRun: null,
+  lastSubmission: null,
 };
 
 let cache: ServerState | undefined;
@@ -68,6 +103,8 @@ export async function loadState(): Promise<ServerState> {
     if (parsed.currentActivity === 'running_code') {
       parsed.currentActivity = 'reviewing_feedback';
     }
+    // activeEditorId is transient — no editor is focused after a restart.
+    parsed.activeEditorId = null;
     cache = parsed;
   } catch {
     cache = structuredClone(DEFAULT_STATE);

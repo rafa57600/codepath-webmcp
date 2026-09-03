@@ -22,6 +22,10 @@ function snapshotForSync() {
     tutorMode: s.tutorMode,
     activeStep: s.activeStep,
     currentActivity: s.currentActivity,
+    editorDrafts: s.editorDrafts,
+    activeEditorId: s.activeEditorId,
+    lastRun: s.lastRun,
+    lastSubmission: s.lastSubmission,
   };
 }
 

@@ -40,6 +40,10 @@ app.post('/api/state', async (req, res) => {
     'tutorMode',
     'activeStep',
     'currentActivity',
+    'editorDrafts',
+    'activeEditorId',
+    'lastRun',
+    'lastSubmission',
   ];
   const clean: Record<string, unknown> = {};
   for (const key of allowed) {

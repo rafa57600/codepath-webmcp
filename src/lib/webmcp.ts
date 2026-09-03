@@ -6,7 +6,17 @@
 // reads/writes real application state.
 
 import { javascriptCourse } from '../data/javascript';
-import type { Exercise, Lesson, ActiveStep, LearningActivity, LearningStepType } from '../types';
+import type {
+  Exercise,
+  Lesson,
+  ActiveStep,
+  LearningActivity,
+  LearningStepType,
+  EditorDraft,
+  LastRun,
+  LastSubmission,
+  TutorPolicy,
+} from '../types';
 import {
   stepsForLesson,
   activeStepIndex,
@@ -31,6 +41,11 @@ export interface SessionState {
   currentActivity: LearningActivity | null;
   /** Which app screen the learner is on: landing ('welcome') or in the course. */
   currentScreen: 'welcome' | 'course';
+  // Live editor state — the authoritative draft source for WebMCP tools.
+  editorDrafts: Record<string, EditorDraft>;
+  activeEditorId: string | null;
+  lastRun: LastRun | null;
+  lastSubmission: LastSubmission | null;
 }
 
 export type StateProvider = {
@@ -71,6 +86,145 @@ function resolveActiveStep(state: SessionState, lesson: Lesson): ActiveStep {
   const cursorReachable = inLesson && !isStepLocked(lesson, state.completedExercises, cursor!.index);
   const choice = cursorReachable ? cursor! : activeStepAt(lesson, furthestActive);
   return choice ?? defaultActiveStep(lesson, state.completedExercises);
+}
+
+// ---------------------------------------------------------------------------
+// Live editor draft helpers — resolve the exact code the learner is editing.
+// ---------------------------------------------------------------------------
+
+/** Stable composite editor ID: "javascript:<lessonId>:<exerciseId|tryit>". */
+export function editorIdFor(
+  courseId: string,
+  lessonId: string,
+  stepId: string
+): string {
+  return `${courseId}:${lessonId}:${stepId}`;
+}
+
+/** Resolve the live draft for a given exercise/step in the current lesson. */
+function liveCodeFor(
+  state: SessionState,
+  lesson: Lesson,
+  stepId: string,
+  fallbackStarter: string
+): { code: string; dirty: boolean } {
+  const id = editorIdFor(state.courseId, lesson.id, stepId);
+  const draft = state.editorDrafts[id];
+  if (draft) return { code: draft.code, dirty: draft.dirty };
+  // No live draft — fall back to the persisted studentCode (legacy), then starter.
+  const saved = state.studentCode[stepId];
+  if (saved !== undefined) return { code: saved, dirty: saved !== fallbackStarter };
+  return { code: fallbackStarter, dirty: false };
+}
+
+/**
+ * Build the `editor` block for get_learning_context: truthful info about whether
+ * the learner is currently editing code and exactly what code is in the editor.
+ */
+function editorContext(
+  state: SessionState,
+  lesson: Lesson,
+  active: ActiveStep
+): Record<string, unknown> {
+  // Only code-oriented steps (try-it playground + exercise-like steps) host an editor.
+  const isCodeStep = active.stepId === 'tryit' || isExerciseLikeStep(active.type);
+  if (!isCodeStep) {
+    return { active: false };
+  }
+
+  const editorId = editorIdFor(state.courseId, lesson.id, active.stepId);
+  const draft = state.editorDrafts[editorId];
+  if (!draft) {
+    return { active: false, stepId: active.stepId };
+  }
+
+  const exerciseId =
+    active.stepId === 'tryit'
+      ? null
+      : lesson.exercises.find((e) => e.id === active.stepId)?.id ?? active.stepId;
+
+  return {
+    active: true,
+    id: editorId,
+    kind: active.stepId === 'tryit' ? 'practice' : active.type,
+    exerciseId,
+    stepId: active.stepId,
+    code: draft.code,
+    dirty: draft.dirty,
+    lastEditedAt: draft.lastEditedAt,
+    focused: state.activeEditorId === editorId,
+  };
+}
+
+// ---- Tutor policy --------------------------------------------------------
+//
+// One canonical helper: derive the full TutorPolicy from the learner's selected
+// tutorMode.  NEVER store policy independently — always derive from tutorMode.
+
+const TUTOR_POLICY_RECORDS: Record<string, TutorPolicy> = {
+  guide: {
+    mode: 'guide',
+    goal: 'Teach through guided discovery.',
+    mustNotRevealFinalSolution: true,
+    revealCompleteSolutionByDefault: false,
+    smallCodeSnippetsAllowed: false,
+    responseStrategy:
+      'Use the learner\'s exact current code and runtime/test evidence. ' +
+      'Give one contextual hint at a time. Do not reveal complete corrected code. ' +
+      'Let the learner make the next correction. ' +
+      'If the learner explicitly asks for the full solution, explain that Guide mode ' +
+      'is configured for guided learning and that they can switch Tutor Mode for direct answers.',
+    instructions: [
+      'Use the learner\'s exact current code and evidence.',
+      'Give one useful hint at a time.',
+      'Do not reveal complete corrected code.',
+      'Let the learner make the next correction.',
+      'If the learner explicitly asks for the full solution, explain that Guide mode is configured for guided learning and that they can switch Tutor Mode for direct answers.',
+    ],
+  },
+  balanced: {
+    mode: 'balanced',
+    goal: 'Provide strong guidance while preserving learner participation.',
+    mustNotRevealFinalSolution: false,
+    revealCompleteSolutionByDefault: false,
+    smallCodeSnippetsAllowed: true,
+    responseStrategy:
+      'Explain the actual problem clearly. Point to specific lines or concepts. ' +
+      'Small code snippets and specific corrections may be suggested. ' +
+      'Do not automatically dump the full solution; only give the complete corrected ' +
+      'code when the learner explicitly asks for it.',
+    instructions: [
+      'Explain the problem clearly, pointing to specific lines or concepts.',
+      'Small code snippets are allowed.',
+      'Specific corrections may be suggested.',
+      'Do not automatically give the complete solution.',
+      'Provide the full solution only when the learner explicitly asks.',
+    ],
+  },
+  explain: {
+    mode: 'explain',
+    goal: 'Explain directly and completely.',
+    mustNotRevealFinalSolution: false,
+    revealCompleteSolutionByDefault: true,
+    smallCodeSnippetsAllowed: true,
+    responseStrategy:
+      'Explain the underlying concept directly. Corrected code may be shown. ' +
+      'The complete solution may be shown. Always explain WHY the corrected version works.',
+    instructions: [
+      'Explain the underlying concept directly.',
+      'Corrected code and the complete solution may be shown.',
+      'Always explain WHY the corrected version works.',
+    ],
+  },
+};
+
+/**
+ * Canonical tutor policy helper.  Returns the authoritative TutorPolicy for
+ * the given tutorMode.  If the mode is unknown, returns the 'guide' policy
+ * (the safest default — never auto-reveals the solution).
+ */
+export function getTutorPolicy(mode: string): TutorPolicy {
+  return TUTOR_POLICY_RECORDS[mode] ?? TUTOR_POLICY_RECORDS.guide;
 }
 
 // ---- Tool handlers ---------------------------------------------------------
@@ -153,6 +307,9 @@ export function getCurrentExercise(state: SessionState, args?: { exerciseId?: st
       const found = findLesson(state.currentLessonId);
       const exercise = found?.lesson.exercises.find((e) => e.id === args.exerciseId);
       if (found && exercise) {
+        // Return the live draft for that exercise if one exists.
+        const live = liveCodeFor(state, found.lesson, exercise.id, exercise.starterCode);
+        const policy = getTutorPolicy(state.tutorMode);
         return text({
           active: true,
           exerciseId: exercise.id,
@@ -160,9 +317,12 @@ export function getCurrentExercise(state: SessionState, args?: { exerciseId?: st
           lessonTitle: found.lesson.title,
           instructions: exercise.instructions,
           starterCode: exercise.starterCode,
-          studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+          studentCode: live.code,
+          dirty: live.dirty,
           difficulty: exercise.difficulty,
           hint: exercise.hint ?? null,
+          tutorMode: state.tutorMode,
+          tutorPolicy: { mustNotRevealFinalSolution: policy.mustNotRevealFinalSolution, responseStrategy: policy.responseStrategy },
         });
       }
       return text({ error: `Exercise "${args.exerciseId}" not found.` });
@@ -185,6 +345,8 @@ export function getCurrentExercise(state: SessionState, args?: { exerciseId?: st
   if (args?.exerciseId) {
     const exercise = found.lesson.exercises.find((e) => e.id === args.exerciseId);
     if (!exercise) return text({ error: `Exercise "${args.exerciseId}" not found in this lesson.` });
+    const live = liveCodeFor(state, found.lesson, exercise.id, exercise.starterCode);
+    const policy = getTutorPolicy(state.tutorMode);
     return text({
       active: true,
       exerciseId: exercise.id,
@@ -192,34 +354,25 @@ export function getCurrentExercise(state: SessionState, args?: { exerciseId?: st
       lessonTitle: found.lesson.title,
       instructions: exercise.instructions,
       starterCode: exercise.starterCode,
-      studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+      studentCode: live.code,
+      dirty: live.dirty,
       difficulty: exercise.difficulty,
       hint: exercise.hint ?? null,
+      tutorMode: state.tutorMode,
+      tutorPolicy: { mustNotRevealFinalSolution: policy.mustNotRevealFinalSolution, responseStrategy: policy.responseStrategy },
     });
   }
 
-  // The learner is genuinely on an exercise-like step (exercise / challenge /
-  // practice) → return that exercise normally.
-  if (isExerciseLikeStep(active.type)) {
+  // The learner is genuinely on an exercise-like step (exercise / challenge) →
+  // return that exercise with its LIVE draft.
+  if (isExerciseLikeStep(active.type) && active.stepId !== 'tryit') {
     const exercise =
-      active.stepId === 'tryit'
-        ? undefined // the "Try it yourself" playground has no Exercise record
-        : found.lesson.exercises.find((e) => e.id === active.stepId) ??
-          found.lesson.exercises.find((e) => !state.completedExercises.includes(e.id)) ??
-          found.lesson.exercises[0];
-    // Practice (Try it yourself) has no tests — report it truthfully as practice.
-    if (active.type === 'practice' || !exercise) {
-      return text({
-        active: true,
-        currentStepType: active.type,
-        currentStepTitle: active.title,
-        reason:
-          active.type === 'practice'
-            ? "The learner is on the 'Try it yourself' playground step (no tests to submit)."
-            : 'No exercise exists for the current step.',
-        exerciseId: null,
-      });
-    }
+      found.lesson.exercises.find((e) => e.id === active.stepId) ??
+      found.lesson.exercises.find((e) => !state.completedExercises.includes(e.id)) ??
+      found.lesson.exercises[0];
+    if (!exercise) return text({ error: 'No exercise in this lesson.' });
+    const live = liveCodeFor(state, found.lesson, exercise.id, exercise.starterCode);
+    const policy = getTutorPolicy(state.tutorMode);
     return text({
       active: true,
       exerciseId: exercise.id,
@@ -227,9 +380,29 @@ export function getCurrentExercise(state: SessionState, args?: { exerciseId?: st
       lessonTitle: found.lesson.title,
       instructions: exercise.instructions,
       starterCode: exercise.starterCode,
-      studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+      studentCode: live.code,
+      dirty: live.dirty,
       difficulty: exercise.difficulty,
       hint: exercise.hint ?? null,
+      tutorMode: state.tutorMode,
+      tutorPolicy: { mustNotRevealFinalSolution: policy.mustNotRevealFinalSolution, responseStrategy: policy.responseStrategy },
+    });
+  }
+
+  // Practice (Try it yourself) step — report it truthfully as a playground.
+  if (active.type === 'practice' || active.stepId === 'tryit') {
+    const draft = state.editorDrafts[
+      editorIdFor(state.courseId, found.lesson.id, 'tryit')
+    ];
+    return text({
+      active: true,
+      currentStepType: 'practice',
+      currentStepTitle: active.title,
+      reason: "The learner is on the 'Try it yourself' playground step (no tests to submit).",
+      exerciseId: null,
+      editor: draft
+        ? { active: true, kind: 'practice', code: draft.code, dirty: draft.dirty }
+        : { active: false },
     });
   }
 
@@ -328,6 +501,7 @@ export function getLearningContext(state: SessionState): ToolResult {
           .map((l) => l.id),
       },
       tutorMode: state.tutorMode,
+      tutorPolicy: getTutorPolicy(state.tutorMode),
     });
   }
   const found = findLesson(state.currentLessonId);
@@ -383,12 +557,14 @@ export function getLearningContext(state: SessionState): ToolResult {
   let studentCode: string | null = null;
   let studentCodeFor: string | null = null;
   if (active.stepId === 'tryit') {
-    studentCode = lesson.tryIt.starterCode;
+    const live = liveCodeFor(state, lesson, 'tryit', lesson.tryIt.starterCode);
+    studentCode = live.code;
     studentCodeFor = 'tryit';
   } else if (isExerciseLikeStep(active.type)) {
     const ex = lesson.exercises.find((e) => e.id === active.stepId);
     if (ex) {
-      studentCode = state.studentCode[ex.id] ?? ex.starterCode;
+      const live = liveCodeFor(state, lesson, ex.id, ex.starterCode);
+      studentCode = live.code;
       studentCodeFor = ex.id;
     }
   }
@@ -421,8 +597,43 @@ export function getLearningContext(state: SessionState): ToolResult {
 
     currentActivity: state.currentActivity,
 
+    // Live editor block — the exact code the learner is editing RIGHT NOW.
+    editor: editorContext(state, lesson, active),
+
     studentCode,
     studentCodeFor,
+    studentCodeDirty:
+      typeof studentCode === 'string' && studentCodeFor
+        ? (state.editorDrafts[editorIdFor(state.courseId, lesson.id, studentCodeFor)]?.dirty ?? false)
+        : null,
+
+    // Structured last execution context (run_code).
+    lastRun: state.lastRun
+      ? {
+          codeUsed: state.lastRun.codeUsed,
+          success: state.lastRun.success,
+          stdout: state.lastRun.stdout,
+          runtimeError: state.lastRun.runtimeError,
+          timestamp: state.lastRun.timestamp,
+        }
+      : null,
+
+    // Structured last submission context (submit_solution).
+    lastSubmission: state.lastSubmission
+      ? {
+          exerciseId: state.lastSubmission.exerciseId,
+          codeUsed: state.lastSubmission.codeUsed,
+          passed: state.lastSubmission.passed,
+          testsPassed: state.lastSubmission.testsPassed,
+          testsTotal: state.lastSubmission.testsTotal,
+          failedTests: state.lastSubmission.failedTests,
+          feedback: state.lastSubmission.feedback,
+          hintContext: state.lastSubmission.hintContext,
+          stdout: state.lastSubmission.stdout,
+          runtimeError: state.lastSubmission.runtimeError,
+          timestamp: state.lastSubmission.timestamp,
+        }
+      : null,
 
     progress: {
       coursePercent,
@@ -455,6 +666,7 @@ export function getLearningContext(state: SessionState): ToolResult {
     latestSubmission: lastSubmissionContext,
 
     tutorMode: state.tutorMode,
+    tutorPolicy: getTutorPolicy(state.tutorMode),
     quizResults: state.quizResults,
   });
 }
@@ -506,7 +718,7 @@ export function toolMetadata(): WebmcpToolMeta[] {
     {
       name: 'get_current_exercise',
       description:
-        'Read-only. Return the exercise the learner is actively working on, OR structured truth (active:false + current step type/title) when the learner is NOT on an exercise/practice step. Omit exerciseId to use the current exercise; an explicit exerciseId always requests that exercise.',
+        'Read-only. Return the exercise the learner is actively working on, OR structured truth (active:false + current step type/title) when the learner is NOT on an exercise/practice step. Omit exerciseId to use the current exercise; an explicit exerciseId always requests that exercise. Includes tutorMode + compact tutorPolicy so an agent knows how to tutor.',
       readOnly: true,
       schema: {
         type: 'object',
@@ -517,7 +729,7 @@ export function toolMetadata(): WebmcpToolMeta[] {
     {
       name: 'run_code',
       description:
-        'State/action. Run the student’s current code in a sandbox and return output. Omit code/exerciseId to run the current exercise starter code.',
+        'State/action. Run the student’s current code in a sandbox and return output. Omit code/exerciseId to run the current exercise starter code. The response includes tutorMode and tutorPolicy — follow the policy when explaining syntax errors, runtime errors, or unexpected output to the learner.',
       readOnly: false,
       schema: {
         type: 'object',
@@ -531,13 +743,14 @@ export function toolMetadata(): WebmcpToolMeta[] {
     {
       name: 'submit_solution',
       description:
-        'State/action. Validate the current exercise against deterministic tests and record the attempt. Omit exerciseId/lessonId to use the current exercise.',
+        'State/action. Validate the current exercise against deterministic tests and record the attempt. The validated code is the learner’s live editor draft unless an explicit code/exerciseId/lessonId is provided. Omit exerciseId/lessonId to use the current exercise. The response includes tutorPolicy — follow it when presenting feedback to the learner.',
       readOnly: false,
       schema: {
         type: 'object',
         properties: {
           exerciseId: { type: 'string', description: 'Optional exercise id to validate; defaults to the current exercise.' },
           lessonId: { type: 'string', description: 'Optional lesson id containing the exercise; defaults to the current lesson.' },
+          code: { type: 'string', description: 'Optional explicit source code to validate; defaults to the learner’s live editor draft for the target exercise.' },
         },
         required: [],
       },
@@ -562,7 +775,7 @@ export function toolMetadata(): WebmcpToolMeta[] {
     {
       name: 'get_learning_context',
       description:
-        "Read-only. Return exactly what the learner is currently doing in CodePath: active lesson, active learning step, activity type, code when relevant, progress, recent mistakes, and next step. Use this before tutoring or explaining what the learner is working on.",
+        "Read-only. Call this before tutoring the learner. The returned tutorPolicy represents the learner's selected tutoring preference and should guide how much help, explanation, hinting, or solution content you provide. Returns exactly what the learner is currently doing in CodePath: active lesson, active learning step, activity type, live editor code, last run/submission context, progress, recent mistakes, and next step.",
       readOnly: true,
       schema: { type: 'object', properties: {}, required: [] },
     },

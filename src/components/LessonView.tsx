@@ -163,6 +163,10 @@ export default function LessonView({ lessonId }: { lessonId: string }) {
         // focus/run/submit handlers re-assert editor-specific activities.
         if (!cur || cur.stepId !== step.stepId) {
           useProgress.getState().setCurrentActivity(activityForStep(step.type));
+          // When the active step is NOT a code editor, no editor is focused.
+          if (step.type !== 'practice' && step.type !== 'exercise' && step.type !== 'challenge') {
+            useProgress.getState().setActiveEditor(null);
+          }
         }
       },
       {

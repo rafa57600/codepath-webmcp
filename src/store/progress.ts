@@ -1,7 +1,16 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { courses } from '../data/javascript';
-import type { Lesson, ExerciseResult, QuizResult, ActiveStep, LearningActivity } from '../types';
+import type {
+  Lesson,
+  ExerciseResult,
+  QuizResult,
+  ActiveStep,
+  LearningActivity,
+  EditorDraft,
+  LastRun,
+  LastSubmission,
+} from '../types';
 
 export interface Attempt {
   exerciseId: string;
@@ -40,6 +49,18 @@ interface ProgressState {
   // they are still choosing a course.
   currentScreen: 'welcome' | 'course';
 
+  // Live editor state — the authoritative draft the learner is editing RIGHT NOW.
+  // Keyed by stable composite IDs like "javascript:introduction:tryit" or
+  // "javascript:variables:variables-1". This is the SINGLE source of truth that
+  // WebMCP tools read; no more stale code.
+  editorDrafts: Record<string, EditorDraft>;
+  /** The editor ID that currently has focus (learner is typing there). Null if no editor is focused. */
+  activeEditorId: string | null;
+  /** Structured result of the most recent code execution (run_code). */
+  lastRun: LastRun | null;
+  /** Structured result of the most recent submission (submit_solution). */
+  lastSubmission: LastSubmission | null;
+
   // actions
   setCourse: (courseId: string) => void;
   setScreen: (screen: 'welcome' | 'course') => void;
@@ -53,6 +74,12 @@ interface ProgressState {
   setActiveStep: (activeStep: ActiveStep) => void;
   setCurrentActivity: (activity: LearningActivity | null) => void;
   resetProgress: () => void;
+
+  // Live editor actions
+  updateEditorDraft: (editorId: string, code: string) => void;
+  setActiveEditor: (editorId: string | null) => void;
+  setLastRun: (lastRun: LastRun) => void;
+  setLastSubmission: (lastSubmission: LastSubmission) => void;
 }
 
 function conceptForLesson(lessonId: string): string {
@@ -87,12 +114,17 @@ export const useProgress = create<ProgressState>()(
 
       currentScreen: 'welcome',
 
+      editorDrafts: {},
+      activeEditorId: null,
+      lastRun: null,
+      lastSubmission: null,
+
       setCourse: (courseId) => set({ courseId }),
 
       setScreen: (screen) => set({ currentScreen: screen }),
 
       setCurrentLesson: (lessonId) =>
-        set({ currentLessonId: lessonId, activeStep: null, currentActivity: null }),
+        set({ currentLessonId: lessonId, activeStep: null, currentActivity: null, activeEditorId: null }),
 
       completeLesson: (lessonId) =>
         set((state) => ({
@@ -163,6 +195,38 @@ export const useProgress = create<ProgressState>()(
 
       setCurrentActivity: (activity) => set({ currentActivity: activity }),
 
+      // Live editor actions — the single source of truth for WebMCP tools.
+      updateEditorDraft: (editorId, code) =>
+        set((state) => {
+          const existing = state.editorDrafts[editorId];
+          const lessonId = existing?.lessonId ?? state.currentLessonId;
+          const stepId = existing?.stepId ?? editorId.split(':').slice(2).join(':');
+          const exerciseId = existing?.exerciseId ?? (stepId === 'tryit' ? null : stepId);
+          // First time we see this editor, the incoming `code` IS the starter
+          // baseline (CodeRunner seeds with initialCode). dirty = false.
+          const starterCode =
+            existing?.starterCode ?? code;
+          const dirty = code !== starterCode;
+          const draft: EditorDraft = {
+            code,
+            lessonId,
+            stepId,
+            exerciseId,
+            starterCode,
+            dirty,
+            lastEditedAt: Date.now(),
+          };
+          return {
+            editorDrafts: { ...state.editorDrafts, [editorId]: draft },
+          };
+        }),
+
+      setActiveEditor: (editorId) => set({ activeEditorId: editorId }),
+
+      setLastRun: (lastRun) => set({ lastRun }),
+
+      setLastSubmission: (lastSubmission) => set({ lastSubmission }),
+
       resetProgress: () =>
         set({
           currentLessonId: 'introduction',
@@ -174,6 +238,10 @@ export const useProgress = create<ProgressState>()(
           studentCode: {},
           activeStep: null,
           currentActivity: null,
+          editorDrafts: {},
+          activeEditorId: null,
+          lastRun: null,
+          lastSubmission: null,
         }),
     }),
     {
@@ -187,13 +255,16 @@ export const useProgress = create<ProgressState>()(
         if (base.currentActivity === 'running_code') {
           base.currentActivity = 'reviewing_feedback';
         }
+        // activeEditorId is transient — no editor has focus after a reload.
+        base.activeEditorId = null;
         return base;
       },
       // currentScreen is transient navigation state — do NOT persist it. On a
       // fresh load the app always begins on the landing (welcome) screen, so
       // letting a stale persisted value survive would misroute the reload.
+      // activeEditorId is also transient — always starts as null on fresh load.
       partialize: (state) => {
-        const { currentScreen, ...rest } = state;
+        const { currentScreen, activeEditorId, ...rest } = state;
         return rest;
       },
     }

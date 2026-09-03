@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Play,
   RotateCcw,
@@ -10,7 +10,8 @@ import {
 import CodeEditor from './CodeEditor';
 import { runUserCode } from '../lib/sandbox';
 import { validateSolution, type ValidationResult } from '../lib/validator';
-import type { Exercise, Lesson, LearningActivity } from '../types';
+import { useProgress } from '../store/progress';
+import type { Exercise, Lesson, LearningActivity, LastRun, LastSubmission } from '../types';
 
 interface RunnerProps {
   lesson: Lesson;
@@ -46,6 +47,24 @@ export default function CodeRunner({
   const [submittedId, setSubmittedId] = useState<string | null>(null);
   const [showHint, setShowHint] = useState(false);
 
+  const store = useProgress;
+
+  // Stable editor ID for the live draft system: "javascript:<lessonId>:<stepId>"
+  // e.g. "javascript:introduction:tryit" or "javascript:variables:variables-1"
+  const editorId = `javascript:${lesson.id}:${exercise ? exercise.id : 'tryit'}`;
+
+  // Initialize the editor draft in the store with the starter code once per
+  // editor instance so WebMCP never reads an empty slot (seeds the "pristine"
+  // baseline the dirty flag compares against).
+  const inited = useRef(false);
+  if (!inited.current) {
+    inited.current = true;
+    const s = store.getState();
+    if (!s.editorDrafts[editorId]) {
+      s.updateEditorDraft(editorId, initialCode);
+    }
+  }
+
   // Notify the parent that the learner is engaging with this code editor.
   const reportActivity = (activity: LearningActivity) => {
     onActivity?.(activity, exercise?.id);
@@ -55,18 +74,89 @@ export default function CodeRunner({
     setCode(c);
     onCodeChange(c);
     reportActivity('editing_code');
+    // Immediately update the live editor draft — WebMCP sees this instantly.
+    const s = store.getState();
+    s.updateEditorDraft(editorId, c);
+    s.setActiveEditor(editorId);
+    s.setCurrentActivity('editing_code');
     // Invalidate previous validation if code changes
     if (validation && validation.testsPassed < validation.testsTotal) {
       setValidation(null);
     }
   };
 
+  const handleEditorFocus = () => {
+    reportActivity('editing_code');
+    const s = store.getState();
+    s.setActiveEditor(editorId);
+    s.setCurrentActivity('editing_code');
+  };
+
+  /**
+   * Shared validation + completion helper. Both the Submit button and the
+   * automatic Run-triggered check call this SAME function so success logic is
+   * never duplicated. It performs the deterministic validation, stores
+   * lastSubmission for WebMCP tutoring, and (only on pass) triggers the exact
+   * completion behavior used by `submit_solution` via onSubmitResult.
+   */
+  const runValidation = async (target: Exercise) => {
+    setSubmitting(true);
+    reportActivity('solving_exercise');
+    store.getState().setCurrentActivity('solving_exercise');
+    try {
+      const result = await validateSolution(lesson, target, code);
+      setValidation(result);
+      setSubmittedId(target.id);
+      if (onSubmitResult) onSubmitResult(result);
+      setRunState({ status: 'done', stdout: result.stdout, error: result.runtimeError });
+      reportActivity('reviewing_feedback');
+      // Store structured lastSubmission context for WebMCP tutoring.
+      const lastSubmission: LastSubmission = {
+        exerciseId: target.id,
+        codeUsed: code,
+        passed: result.passed,
+        testsPassed: result.testsPassed,
+        testsTotal: result.testsTotal,
+        failedTests: result.failedTests,
+        feedback: result.feedback,
+        hintContext: result.hintContext,
+        stdout: result.stdout,
+        runtimeError: result.runtimeError,
+        timestamp: Date.now(),
+      };
+      store.getState().setLastSubmission(lastSubmission);
+      store.getState().setCurrentActivity('reviewing_feedback');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleRun = async () => {
     setRunState({ status: 'running' });
     reportActivity('running_code');
+    store.getState().setCurrentActivity('running_code');
     const result = await runUserCode(code);
     setRunState({ status: 'done', stdout: result.stdout, error: result.runtimeError });
     reportActivity('reviewing_feedback');
+    // Store structured lastRun context for WebMCP tutoring.
+    const lastRun: LastRun = {
+      codeUsed: code,
+      success: result.success,
+      stdout: result.stdout,
+      runtimeError: result.runtimeError,
+      timestamp: Date.now(),
+    };
+    store.getState().setLastRun(lastRun);
+
+    // AUTO-SUBMIT: for a graded exercise/challenge whose code ran without a
+    // runtime error, run the SAME deterministic tests automatically. If they
+    // all pass, the exercise is completed exactly as if Submit were pressed.
+    // For the free "Try it yourself" playground we never auto-complete.
+    if (exercise && result.success) {
+      await runValidation(exercise);
+    } else {
+      store.getState().setCurrentActivity('reviewing_feedback');
+    }
   };
 
   const handleReset = () => {
@@ -75,22 +165,13 @@ export default function CodeRunner({
     setRunState({ status: 'idle' });
     setValidation(null);
     setShowHint(false);
+    // Reset the draft to the original starter code.
+    store.getState().updateEditorDraft(editorId, initialCode);
   };
 
   const handleSubmit = async () => {
     if (!exercise) return;
-    setSubmitting(true);
-    reportActivity('solving_exercise');
-    try {
-      const result = await validateSolution(lesson, exercise, code);
-      setValidation(result);
-      setSubmittedId(exercise.id);
-      if (onSubmitResult) onSubmitResult(result);
-      setRunState({ status: 'done', stdout: result.stdout, error: result.runtimeError });
-      reportActivity('reviewing_feedback');
-    } finally {
-      setSubmitting(false);
-    }
+    await runValidation(exercise);
   };
 
   const isComplete = validation?.passed ?? false;
@@ -115,7 +196,7 @@ export default function CodeRunner({
       </div>
 
       <div className="p-4">
-        <CodeEditor value={code} onChange={handleCodeChange} onFocus={() => reportActivity('editing_code')} />
+        <CodeEditor value={code} onChange={handleCodeChange} onFocus={handleEditorFocus} />
 
         <div className="mt-3.5 flex flex-wrap items-center gap-2">
           <button
@@ -211,10 +292,17 @@ export default function CodeRunner({
             <div>
               <div className="font-semibold">
                 {validation.passed
-                  ? 'All tests passed!'
+                  ? mode === 'exercise'
+                    ? '✓ Code ran successfully · ✓ All tests passed'
+                    : 'All tests passed!'
                   : `Not quite — ${validation.testsPassed}/${validation.testsTotal} tests passed`}
               </div>
               <p className="mt-1 text-kumo-text-default">{validation.feedback}</p>
+              {validation.passed && mode === 'exercise' && (
+                <p className="mt-1.5 text-xs font-medium text-kumoText-info">
+                  Exercise completed · Next step unlocked
+                </p>
+              )}
               {!validation.passed && (
                 <p className="mt-1.5 text-xs text-kumo-text-subtle">
                   Tutor hint: {validation.hintContext}

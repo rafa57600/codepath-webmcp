@@ -21,6 +21,7 @@ import {
   isExerciseLikeStep,
   learningStepType,
 } from '../src/lib/unlock';
+import { getTutorPolicy } from '../src/lib/webmcp';
 import type { ServerState } from './state.js';
 
 const server = new McpServer({
@@ -60,6 +61,55 @@ function resolveActiveStep(
   const cursorReachable = inLesson && !isStepLocked(lesson, state.completedExercises, cursor!.index);
   const choice = cursorReachable ? cursor! : activeStepAt(lesson, furthestActive);
   return choice ?? defaultActiveStep(lesson, state.completedExercises);
+}
+
+// ---- live editor draft helpers (mirror webmcp.ts) --------------------------
+
+function editorIdFor(courseId: string, lessonId: string, stepId: string): string {
+  return `${courseId}:${lessonId}:${stepId}`;
+}
+
+function liveCodeFor(
+  state: ServerState,
+  lesson: (typeof javascriptCourse)['lessons'][number],
+  stepId: string,
+  fallbackStarter: string
+): { code: string; dirty: boolean } {
+  const id = editorIdFor(state.courseId, lesson.id, stepId);
+  const draft = state.editorDrafts[id];
+  if (draft) return { code: draft.code, dirty: draft.dirty };
+  const saved = state.studentCode[stepId];
+  if (saved !== undefined) return { code: saved, dirty: saved !== fallbackStarter };
+  return { code: fallbackStarter, dirty: false };
+}
+
+function editorContext(
+  state: ServerState,
+  lesson: (typeof javascriptCourse)['lessons'][number],
+  active: { stepId: string; type: string }
+): Record<string, unknown> {
+  const isCodeStep =
+    active.stepId === 'tryit' ||
+    active.type === 'exercise' ||
+    active.type === 'challenge' ||
+    active.type === 'practice';
+  if (!isCodeStep) return { active: false };
+  const editorId = editorIdFor(state.courseId, lesson.id, active.stepId);
+  const draft = state.editorDrafts[editorId];
+  if (!draft) return { active: false, stepId: active.stepId };
+  const exerciseId =
+    active.stepId === 'tryit' ? null : active.stepId;
+  return {
+    active: true,
+    id: editorId,
+    kind: active.stepId === 'tryit' ? 'practice' : active.type,
+    exerciseId,
+    stepId: active.stepId,
+    code: draft.code,
+    dirty: draft.dirty,
+    lastEditedAt: draft.lastEditedAt,
+    focused: state.activeEditorId === editorId,
+  };
 }
 
 function runInVm(code: string): { success: boolean; stdout: string[]; runtimeError: string | null } {
@@ -145,7 +195,7 @@ server.registerTool(
   'get_current_exercise',
   {
     description:
-      'Return the exercise the learner is actively working on, OR structured truth (active:false + current step) when they are NOT on an exercise/practice step. An explicit exerciseId always requests that exercise.',
+      'Return the exercise the learner is actively working on, OR structured truth (active:false + current step) when they are NOT on an exercise/practice step. An explicit exerciseId always requests that exercise. Includes tutorMode + compact tutorPolicy so an agent knows how to tutor.',
     inputSchema: { exerciseId: z.string().optional() },
   },
   async ({ exerciseId }) => {
@@ -157,6 +207,8 @@ server.registerTool(
     if (exerciseId) {
       const exercise = found.lesson.exercises.find((e) => e.id === exerciseId);
       if (!exercise) return textResult({ error: `Exercise "${exerciseId}" not found in this lesson.` });
+      const live = liveCodeFor(state, found.lesson, exercise.id, exercise.starterCode);
+      const policy = getTutorPolicy(state.tutorMode);
       return textResult({
         active: true,
         exerciseId: exercise.id,
@@ -164,30 +216,26 @@ server.registerTool(
         lessonTitle: found.lesson.title,
         instructions: exercise.instructions,
         starterCode: exercise.starterCode,
-        studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+        studentCode: live.code,
+        dirty: live.dirty,
         difficulty: exercise.difficulty,
         hint: exercise.hint ?? null,
+        tutorMode: state.tutorMode,
+        tutorPolicy: { mustNotRevealFinalSolution: policy.mustNotRevealFinalSolution, responseStrategy: policy.responseStrategy },
       });
     }
 
     const active = resolveActiveStep(state, found.lesson);
 
     // Learner is on an exercise-like step → return it (practice has no tests).
-    if (isExerciseLikeStep(active.type)) {
-      if (active.type === 'practice' || active.stepId === 'tryit') {
-        return textResult({
-          active: true,
-          currentStepType: 'practice',
-          currentStepTitle: 'Try it yourself',
-          reason: "The learner is on the 'Try it yourself' playground step (no tests to submit).",
-          exerciseId: null,
-        });
-      }
+    if (isExerciseLikeStep(active.type) && active.stepId !== 'tryit') {
       const exercise =
         found.lesson.exercises.find((e) => e.id === active.stepId) ??
         found.lesson.exercises.find((e) => !state.completedExercises.includes(e.id)) ??
         found.lesson.exercises[0];
       if (!exercise) return textResult({ error: 'No exercise in this lesson.' });
+      const live = liveCodeFor(state, found.lesson, exercise.id, exercise.starterCode);
+      const policy = getTutorPolicy(state.tutorMode);
       return textResult({
         active: true,
         exerciseId: exercise.id,
@@ -195,9 +243,27 @@ server.registerTool(
         lessonTitle: found.lesson.title,
         instructions: exercise.instructions,
         starterCode: exercise.starterCode,
-        studentCode: state.studentCode[exercise.id] ?? exercise.starterCode,
+        studentCode: live.code,
+        dirty: live.dirty,
         difficulty: exercise.difficulty,
         hint: exercise.hint ?? null,
+        tutorMode: state.tutorMode,
+        tutorPolicy: { mustNotRevealFinalSolution: policy.mustNotRevealFinalSolution, responseStrategy: policy.responseStrategy },
+      });
+    }
+
+    // Learner is on the try-it playground step.
+    if (active.stepId === 'tryit' || active.type === 'practice') {
+      const draft = state.editorDrafts[editorIdFor(state.courseId, found.lesson.id, 'tryit')];
+      return textResult({
+        active: true,
+        currentStepType: 'practice',
+        currentStepTitle: 'Try it yourself',
+        reason: "The learner is on the 'Try it yourself' playground step (no tests to submit).",
+        exerciseId: null,
+        editor: draft
+          ? { active: true, kind: 'practice', code: draft.code, dirty: draft.dirty }
+          : { active: false },
       });
     }
 
@@ -214,20 +280,70 @@ server.registerTool(
 server.registerTool(
   'run_code',
   {
-    description: 'Run the student’s current code in a sandbox and return output.',
+    description: "Run the student\u2019s current code in a sandbox and return output. The response includes tutorMode and tutorPolicy \u2014 follow the policy when explaining syntax errors, runtime errors, or unexpected output to the learner.",
     inputSchema: { code: z.string().optional(), exerciseId: z.string().optional() },
   },
   async ({ code, exerciseId }) => {
     const state = await loadState();
     const found = findLesson(state.currentLessonId);
-    const target =
-      code ?? (exerciseId ? state.studentCode[exerciseId] ?? found?.lesson.tryIt.starterCode ?? '' : found?.lesson.tryIt.starterCode ?? '');
+
+    // Resolve code priority: explicit code > live editor draft > saved > starter.
+    let target: string;
+    if (code) {
+      target = code;
+    } else if (exerciseId) {
+      const ex = found?.lesson.exercises.find((e) => e.id === exerciseId);
+      if (ex) {
+        const live = liveCodeFor(state, found!.lesson, ex.id, ex.starterCode);
+        target = live.code;
+      } else if (state.studentCode[exerciseId]) {
+        target = state.studentCode[exerciseId];
+      } else {
+        target = found?.lesson.tryIt.starterCode ?? '';
+      }
+    } else if (found) {
+      const active = resolveActiveStep(state, found.lesson);
+      if (active.stepId === 'tryit') {
+        const live = liveCodeFor(state, found.lesson, 'tryit', found.lesson.tryIt.starterCode);
+        target = live.code;
+      } else if (isExerciseLikeStep(active.type)) {
+        const activeExId = active.stepId;
+        const ex = found.lesson.exercises.find((e) => e.id === activeExId);
+        if (ex) {
+          const live = liveCodeFor(state, found.lesson, ex.id, ex.starterCode);
+          target = live.code;
+        } else {
+          target = found.lesson.tryIt.starterCode;
+        }
+      } else {
+        target = found.lesson.tryIt.starterCode;
+      }
+    } else {
+      target = '';
+    }
+
     const r = runInVm(target);
+    const lastRun = {
+      codeUsed: target,
+      success: r.success,
+      stdout: r.stdout,
+      runtimeError: r.runtimeError,
+      timestamp: Date.now(),
+    };
+    state.lastRun = lastRun;
+    if (state.currentActivity !== 'running_code') {
+      state.currentActivity = 'reviewing_feedback';
+    }
+    await saveState(state);
+    const policy = getTutorPolicy(state.tutorMode);
     return textResult({
       success: r.success,
       stdout: r.stdout,
       runtimeError: r.runtimeError,
+      codeUsed: target,
       exerciseId: exerciseId ?? null,
+      tutorMode: state.tutorMode,
+      tutorPolicy: policy,
     });
   }
 );
@@ -235,10 +351,10 @@ server.registerTool(
 server.registerTool(
   'submit_solution',
   {
-    description: 'Validate the current exercise against deterministic tests.',
-    inputSchema: { exerciseId: z.string().optional(), lessonId: z.string().optional() },
+    description: "Validate the current exercise against deterministic tests. The validated code is the learner\u2019s live editor draft unless an explicit code/exerciseId/lessonId is provided. The response includes tutorPolicy \u2014 follow it when presenting feedback to the learner.",
+    inputSchema: { exerciseId: z.string().optional(), lessonId: z.string().optional(), code: z.string().optional() },
   },
-  async ({ exerciseId, lessonId }) => {
+  async ({ exerciseId, lessonId, code }) => {
     const state = await loadState();
     const targetLesson = lessonId ?? state.currentLessonId;
     const found = findLesson(targetLesson);
@@ -246,8 +362,17 @@ server.registerTool(
     const exercise =
       found.lesson.exercises.find((e) => e.id === exerciseId) ?? found.lesson.exercises[0];
     if (!exercise) return textResult({ error: 'Exercise not found.' });
-    const code = state.studentCode[exercise.id] ?? exercise.starterCode;
-    const run = runInVm(code);
+
+    // Resolve code priority: explicit code > live editor draft > saved > starter.
+    let validatedCode: string;
+    if (code) {
+      validatedCode = code;
+    } else {
+      const live = liveCodeFor(state, found.lesson, exercise.id, exercise.starterCode);
+      validatedCode = live.code;
+    }
+
+    const run = runInVm(validatedCode);
     const scope: Record<string, unknown> = { outputs: run.stdout };
     let testsPassed = 0;
     const failed: string[] = [];
@@ -269,9 +394,29 @@ server.registerTool(
       if (found.lesson.exercises.every((e) => state.completedExercises.includes(e.id))) {
         state.completedLessons = Array.from(new Set([...state.completedLessons, targetLesson]));
       }
-      await saveState(state);
     }
 
+    // Store structured lastSubmission context.
+    state.lastSubmission = {
+      exerciseId: exercise.id,
+      codeUsed: validatedCode,
+      passed,
+      testsPassed,
+      testsTotal: exercise.tests.length,
+      failedTests: failed.map((description) => ({ id: description, description })),
+      feedback: run.runtimeError
+        ? `Error: ${run.runtimeError}`
+        : passed
+          ? 'All tests passed.'
+          : 'Some tests failed.',
+      hintContext: passed ? '' : exercise.hint ?? '',
+      stdout: run.stdout,
+      runtimeError: run.runtimeError,
+      timestamp: Date.now(),
+    };
+    await saveState(state);
+
+    const subPolicy = getTutorPolicy(state.tutorMode);
     return textResult({
       passed,
       testsPassed,
@@ -283,8 +428,11 @@ server.registerTool(
           : 'Some tests failed.',
       hintContext: passed ? '' : exercise.hint ?? '',
       failedTests: failed,
+      codeUsed: validatedCode,
       exerciseId: exercise.id,
       lesson: targetLesson,
+      tutorMode: state.tutorMode,
+      tutorPolicy: subPolicy,
     });
   }
 );
@@ -309,7 +457,7 @@ server.registerTool(
   'get_learning_context',
   {
     description:
-      'Read-only. Return exactly what the learner is currently doing in CodePath: active lesson, active learning step, activity type, code when relevant, progress, recent mistakes, and next step. Use this before tutoring.',
+      "Read-only. Call this before tutoring the learner. The returned tutorPolicy represents the learner's selected tutoring preference and should guide how much help, explanation, hinting, or solution content you provide. Returns exactly what the learner is currently doing in CodePath: active lesson, active learning step, activity type, live editor code, last run/submission context, progress, recent mistakes, and next step.",
   },
   async () => {
     const state = await loadState();
@@ -355,12 +503,14 @@ server.registerTool(
     let studentCode: string | null = null;
     let studentCodeFor: string | null = null;
     if (active.stepId === 'tryit') {
-      studentCode = lesson.tryIt.starterCode;
+      const live = liveCodeFor(state, lesson, 'tryit', lesson.tryIt.starterCode);
+      studentCode = live.code;
       studentCodeFor = 'tryit';
     } else if (isExerciseLikeStep(active.type)) {
       const ex = lesson.exercises.find((e) => e.id === active.stepId);
       if (ex) {
-        studentCode = state.studentCode[ex.id] ?? ex.starterCode;
+        const live = liveCodeFor(state, lesson, ex.id, ex.starterCode);
+        studentCode = live.code;
         studentCodeFor = ex.id;
       }
     }
@@ -392,8 +542,37 @@ server.registerTool(
         unlocked: !isStepLocked(lesson, state.completedExercises, active.index),
       },
       currentActivity: state.currentActivity,
+      editor: editorContext(state, lesson, active),
       studentCode,
       studentCodeFor,
+      studentCodeDirty:
+        typeof studentCode === 'string' && studentCodeFor
+          ? (state.editorDrafts[editorIdFor(state.courseId, lesson.id, studentCodeFor)]?.dirty ?? false)
+          : null,
+      lastRun: state.lastRun
+        ? {
+            codeUsed: state.lastRun.codeUsed,
+            success: state.lastRun.success,
+            stdout: state.lastRun.stdout,
+            runtimeError: state.lastRun.runtimeError,
+            timestamp: state.lastRun.timestamp,
+          }
+        : null,
+      lastSubmission: state.lastSubmission
+        ? {
+            exerciseId: state.lastSubmission.exerciseId,
+            codeUsed: state.lastSubmission.codeUsed,
+            passed: state.lastSubmission.passed,
+            testsPassed: state.lastSubmission.testsPassed,
+            testsTotal: state.lastSubmission.testsTotal,
+            failedTests: state.lastSubmission.failedTests,
+            feedback: state.lastSubmission.feedback,
+            hintContext: state.lastSubmission.hintContext,
+            stdout: state.lastSubmission.stdout,
+            runtimeError: state.lastSubmission.runtimeError,
+            timestamp: state.lastSubmission.timestamp,
+          }
+        : null,
       progress: { coursePercent, lessonPercent, completedLessons },
       completedSteps,
       nextStep,
@@ -407,6 +586,7 @@ server.registerTool(
           }
         : null,
       tutorMode: state.tutorMode,
+      tutorPolicy: getTutorPolicy(state.tutorMode),
       quizResults: state.quizResults,
     });
   }
